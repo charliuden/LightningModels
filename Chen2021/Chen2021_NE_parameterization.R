@@ -26,11 +26,10 @@ library(ramify)
 library(cowplot)
 library(gridExtra)
 
-df <- read.csv("/raid/cuden/data/era5_vaisalaLightning_montlySummaries_NEclip.csv")
-df <- df[,c("lon", "lat", "year", "mean_strike_rate", "cape_monthly_mean", "mtpr_monthly_mean")]
-df <- mutate(df, cxp = cape_monthly_mean*mtpr_monthly_mean)
+df <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummaries_2005-2010_NEclip.csv")[,2:16]
+df <- df[,c("lon", "lat", "year", "mean_strike_rate", "cape_monthly_mean", "mtpr_monthly_mean", "cxp_monthly_mean")]
 
-x <- df$cxp
+x <- df$cxp_monthly_mean
 y <- df$mean_strike_rate
 
 plot(x, y)
@@ -121,7 +120,7 @@ cxp_bin_min <- seq(min, max, by=bin_size)
 
 strike_bin_means <- rep(0, length(bins))
 
-for (i in seq(1: length(bins))){
+for (i in seq(1: length(cxp_bin_min))){
   bin <- cxp_bin_min[i]
   
   cxp <- df %>% 
@@ -165,7 +164,7 @@ df <- cbind(df, y_pred_pl_op, y_pred_sc, y_pred_li, y_pred_np)
 df <- mutate(df, mean = (y_pred_pl_op+y_pred_sc+y_pred_li+y_pred_np)/4)
 head(df)
 
-p1 <- ggplot(data = df, mapping = aes(x = cxp, y = mean_strike_rate)) +
+p1 <- ggplot(data = df, mapping = aes(x = cxp_monthly_mean, y = mean_strike_rate)) +
   geom_pointdensity(adjust = .001, alpha=0.5) +
   scale_color_viridis() + 
   xlab(expression(CAPE~x~Precip~(W~m^-2))) +
@@ -184,7 +183,7 @@ p1 <- ggplot(data = df, mapping = aes(x = cxp, y = mean_strike_rate)) +
 
 legend_colors <- c("Power law (linear opt.)" = "orange", "Scale" = "yellowgreen", "Linear" = "lightblue", "Non-parametric" ="darkblue", "Mean"= "black")
 
-legend_plot <- ggplot(df, aes(x = cxp)) +
+legend_plot <- ggplot(df, aes(x = cxp_monthly_mean)) +
   geom_line(aes(y = y_pred_pl_op, color = 'Power law (linear opt.)'), linewidth = 0.7, linetype = "dashed") +
   geom_line(aes(y = y_pred_sc, color = 'Scale'), linewidth = 0.7, linetype = "dashed") +
   geom_line(aes(y = y_pred_li, color = 'Linear'), linewidth = 0.7, linetype = "dashed") +
@@ -210,7 +209,7 @@ p2 <- ggplot(data=df, aes(x=mean_strike_rate, y=after_stat(density))) +
   scale_x_continuous(breaks=seq(0, 2, by=1)) +
   xlab("")
 
-p3 <- ggplot(data=df, aes(x=cxp, y=after_stat(density))) +
+p3 <- ggplot(data=df, aes(x=cxp_monthly_mean, y=after_stat(density))) +
   geom_density(color="#6DBCC3", linetype = "dashed") +
   geom_histogram(aes(y = ..density..), color = "white", fill = alpha("#6DBCC3", .2)) + 
   theme_minimal() +

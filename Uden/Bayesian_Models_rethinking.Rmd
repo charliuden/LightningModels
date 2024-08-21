@@ -1,0 +1,394 @@
+---
+title: "Bayesian Models Built in R's Rethinking Package"
+output: html_document
+date: "2024-08-20"
+name: Charlotte Uden
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Lightning Models
+
+
+```{r, echo=FALSE}
+library(ggplot2)
+library(dplyr)
+library(rethinking)
+library(Metrics)
+library(ramify)
+library(cowplot)
+library(gridExtra)
+library(ggpointdensity)
+library(viridis)
+```
+
+## Chen et al 2021
+Begin by parameterizing the CAPE x precipitation models from Chen et al 2021. 
+
+
+```{r, echo=FALSE}
+df <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummaries_2005-2010_NEclip.csv")[,2:16]
+cxp <- df$cxp
+y <- df$mean_strike_rate
+```
+
+```{r}
+
+```
+
+```{r}
+ggplot(data = df, mapping = aes(x = cxp_monthly_mean, y = mean_strike_rate)) +
+  geom_pointdensity(adjust = .001, alpha=0.5) +
+  scale_color_viridis() + 
+  xlab(expression(CAPE~x~Precip~(W~m^-2))) +
+  ylab(expression(Lightning~flash~rate~(number~per~km^2~per~month))) + 
+  ggtitle("May-August 2005-2010 n=3246")+
+  guides(alpha="none", color="none") + 
+  theme_minimal() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) 
+```
+
+### Power Law: FR = a(CAPE × Precip)^b
+With the parameters a and b derived from the optimization at the log-log scale (that is, a linear regression between logarithmic values of flash rate and CAPE × Precip were performed in practice). Similar to Romps et al.36, this model assumed that the lightning flash rate depends on the product of CAPE and Precip. The coefficient b allows nonlinear impacts to be represented in this form. 
+
+```{r}
+x <- df$cxp_monthly_mean
+y <- df$mean_strike_rate
+# Transform data
+log_x <- log(x)
+log_y <- log(y)
+
+plot(log_x, log_y)
+
+#fit the model
+pl <- nls(log_y ~ a*log_x^b, 
+          start = list(a = -1, 
+                       b = -1))
+summary(pl)
+
+curve.nlslrc = nlsLM(photolrc ~ Am*(1-((1-(Rd/Am))^(1-(PARlrc/LCP)))),
+                     start=list(Am=(max(photolrc)-min(photolrc)),
+                                Rd=-min(photolrc),
+                                LCP= (max(photolrc)-1)),
+                     data = curvelrc)
+
+#parameter values
+a_pl <- summary(pl)$coefficients[1,1]
+b_pl <- summary(pl)$coefficients[2,1]
+
+#predict flash rate
+y_pred_pl <- a_pl*log_x^b_pl
+
+plot(x, y_pred_pl)
+
+```
+
+### Power law (linear opt) 
+A variation of the power law model, but with the least squares optimization obtained without a logarithmic transformation. 
+
+```{r}
+pl_op <- nls(y ~ a*x^b, start = list(a = 1, b = 1))
+summary(pl_op)
+
+a_pl_op <- summary(pl_op)$coefficients[1,1]
+b_pl_op <- summary(pl_op)$coefficients[2,1]
+
+y_pred_pl_op <- a_pl_op*x^b_pl_op
+
+plot(x, y_pred_pl_op)
+
+```
+
+### Scale: FR = a(CAPE × Precip) 
+The original scaling approach proposed by Romps et al. 2014
+
+```{r}
+sc <- lm(y ~ x)
+summary(sc)
+
+a_sc <- summary(sc)$coefficients[2,1]
+b_sc <- summary(sc)$coefficients[1,1]
+
+y_pred_sc <- a_sc*x
+
+plot(x, y_pred_sc)
+```
+
+### Linear: FR = a(CAPE × Precip) + b
+we slightly modified the scaling approach by allowing a negative intercept: FR = a(CAPE × Precip) + b -that is, positive flash rate was simulated only when CAPE × Precip was greater than a threshold.
+
+```{r}
+li <- lm(y ~ x)
+summary(li)
+
+a_li <- summary(li)$coefficients[2,1]
+b_li <- summary(li)$coefficients[1,1]
+
+y_pred_li <- clip(a_li*x+b_li, 0, NA)
+
+plot(x, y_pred_li)
+```
+
+### Non-parametric 
+Modelled flash rate value in each bin was derived using the arithmetic means of the observed flash rate in all grid cells associated with the corresponding ranges of CAPE × Precip. Based on the script Chen shared, there are 50 bins. 
+
+```{r}
+max <- max(df$cxp_monthly_mean)
+min <- min(df$cxp_monthly_mean)
+nbins <- 50
+range <- max-min
+bin_size = range / nbins
+
+cxp_bin_min <- seq(min, max, by=bin_size)
+
+strike_bin_means <- rep(0, length(cxp_bin_min))
+
+for (i in seq(1: length(cxp_bin_min))){
+  bin <- cxp_bin_min[i]
+  
+  cxp <- df %>% 
+    filter(between(cxp_monthly_mean, bin, bin+bin_size))
+  
+  mean <- mean(cxp$mean_strike_rate)
+  strike_bin_means[i] <- mean
+}
+
+np_table <- as.data.frame(cbind(cxp_bin_min, strike_bin_means))
+np_table <- mutate(np_table, cxp_bin_max = cxp_bin_min + bin_size)
+
+#apply the model
+y_pred_np <- rep(0, length(x))
+
+for (i in seq(1:length(x))){
+  cxp = x[i]
+  
+  bin <- np_table %>% filter(cxp_bin_min <= cxp, 
+                      cxp_bin_max > cxp)
+  
+  y_pred_i <- bin$strike_bin_means
+  y_pred_np[i] <- y_pred_i
+}
+
+plot(x, y_pred_np)
+```
+
+```{r}
+df <- cbind(df, y_pred_pl_op, y_pred_sc, y_pred_li, y_pred_np)
+df <- mutate(df, mean = (y_pred_pl_op+y_pred_sc+y_pred_li+y_pred_np)/4)
+```
+
+```{r}
+p1 <- ggplot(data = df, mapping = aes(x = cxp_monthly_mean, y = mean_strike_rate)) +
+  geom_pointdensity(adjust = .001, alpha=0.5) +
+  scale_color_viridis() + 
+  xlab(expression(CAPE~x~Precip~(W~m^-2))) +
+  ylab(expression(Lightning~flash~rate~(number~per~km^2~per~month))) + 
+  ggtitle("May-August 2005-2010 n=3246")+
+  guides(alpha="none", color="none") + 
+  geom_line(data=df, aes(y=y_pred_pl_op), color='orange', linetype = "dashed",linewidth=0.7) + 
+  geom_line(data=df, aes(y=y_pred_sc), color='yellowgreen', linetype = "dashed",linewidth=0.7) + 
+  geom_line(data=df, aes(y=y_pred_li), color='lightblue', linetype = "dashed",linewidth=0.7) + 
+  geom_line(data=df, aes(y=y_pred_np), color='darkblue', linetype = "dashed",linewidth=0.7) + 
+  geom_line(data=df, aes(y=mean), color='black',linewidth=0.7) +
+  theme_minimal() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) 
+
+legend_colors <- c("Power law (linear opt.)" = "orange", "Scale" = "yellowgreen", "Linear" = "lightblue", "Non-parametric" ="darkblue", "Mean"= "black")
+
+legend_plot <- ggplot(df, aes(x = cxp_monthly_mean)) +
+  geom_line(aes(y = y_pred_pl_op, color = 'Power law (linear opt.)'), linewidth = 0.7, linetype = "dashed") +
+  geom_line(aes(y = y_pred_sc, color = 'Scale'), linewidth = 0.7, linetype = "dashed") +
+  geom_line(aes(y = y_pred_li, color = 'Linear'), linewidth = 0.7, linetype = "dashed") +
+  geom_line(aes(y = y_pred_np, color = 'Non-parametric'), linewidth = 0.7, linetype = "dashed") +
+  geom_line(aes(y = mean, color = 'Mean'), linewidth = 0.7, linetype = "dashed") +
+  labs(color = "Models") +
+  scale_color_manual(values = legend_colors) +
+  theme_minimal() 
+
+cowplot::get_legend(legend_plot)
+legend <- get_legend(legend_plot)
+#grid.draw(legend)  
+
+p2 <- ggplot(data=df, aes(x=mean_strike_rate, y=after_stat(density))) +
+  coord_flip() + 
+  scale_y_reverse() +
+  geom_density(color="#6DBCC3", linetype = "dashed") +
+  geom_histogram(aes(y = ..density..), color = "white", fill = alpha("#6DBCC3", .2)) + 
+  theme_minimal() +
+  guides(y="none", y.sec=guide_axis(title = expression(Lightning~flash~rate~(number~per~km^2~per~month)))) +
+  scale_x_continuous(breaks=seq(0, 2, by=1)) +
+  xlab("")
+
+p3 <- ggplot(data=df, aes(x=cxp_monthly_mean, y=after_stat(density))) +
+  geom_density(color="#6DBCC3", linetype = "dashed") +
+  geom_histogram(aes(y = ..density..), color = "white", fill = alpha("#6DBCC3", .2)) + 
+  theme_minimal() +
+  xlab(expression(CAPE~x~Precip~(W~m^-2))) +
+  scale_x_continuous(breaks=seq(0, 0.015, by=0.005)) 
+
+blankPlot <- ggplot()+geom_blank(aes(1,1))+
+  theme(
+    plot.background = element_blank(), 
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(), 
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_blank(), 
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank()
+  )
+
+grid.arrange(p1, p2, p3, cowplot::get_legend(legend_plot), 
+             ncol=2, nrow=2, widths=c(4, 1), heights=c(4, 1))
+
+```
+
+```{r, echo=FALSE}
+#Root Mean Squared Error - lower values are better
+rmse_pl_op <- rmse(y, y_pred_pl_op) #best score
+rmse_sc <- rmse(y, y_pred_sc)
+rmse_li <- rmse(y, y_pred_li)
+rmse_np <- rmse(y, y_pred_np)
+rmse_table <- as.data.frame(cbind(rmse_pl_op, rmse_sc, rmse_li, rmse_np))
+print(rmse_table)
+```
+
+### Rethiking 
+
+The Paleo climate data used to drive LPJ-GUESS does not include convective available potential energy. 
+Goal: to build a lightning prediction model that uses climate variables included in the PalEON dataset.Compare model performance with that of models from Chen et al. 2021 
+
+```{r, echo=FALSE}
+dat <- list(
+  S = df$mean_strike_rate,
+  T = df$t2m_monthly_mean)
+
+m1 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + bT*T,
+    a ~ dnorm(0, 10), 
+    bT ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat, chains=2)
+
+
+
+```
+
+
+
+```{r}
+precis(m1)
+traceplot(m1)
+```
+
+```{r}
+post <- extract.samples( m1 , n=1e4 )
+precis(post)
+```
+
+```{r}
+plot( S ~ T , data=dat , col=rangi2 )
+#find mean posterior prediction for each parameter
+aT_map <- mean(post$a)
+bT_map <- mean(post$bT)
+sigma_map <- mean(post$sigma) #don't use sigma for the line, only to sample from a normal distribution if we were to apply the model
+curve( a_map + bT_map*(x) , add=TRUE )
+```
+### Short Wave Radiation
+
+```{r, echo=FALSE}
+
+dat2 <- list(
+  S = df$mean_strike_rate,
+  R = df$msdwswrf_monthly_mean)
+
+m2 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + bR*R,
+    a ~ dnorm(0, 10), 
+    bR ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat2, chains=2)
+
+precis(m2)
+traceplot(m2)
+```
+
+```{r, echo=FLASE}
+post2 <- extract.samples( m2 , n=1e4 )
+
+plot( S ~ R , data=dat2 , col=rangi2 )
+#find mean posterior prediction for each parameter
+aR_map <- mean(post2$a)
+bR_map <- mean(post2$bR)
+sigma_map <- mean(post$sigma) #don't use sigma for the line, only to sample from a normal distribution if we were to apply the model
+curve( a_map + bR_map*(x) , add=TRUE )
+
+```
+
+### Linear Model from Chen 2021 in Ulam
+FR = a(CAPE × Precip) + b
+
+```{r, echo=FLASE}
+dat3 <- list(
+  S = df$mean_strike_rate,
+  C = df$cxp_monthly_mean)
+
+m3 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + bC*C,
+    a ~ dnorm(0, 10), 
+    bC ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat3, chains=2)
+
+precis(m3)
+traceplot(m3)
+```
+
+
+```{r, echo=FLASE}
+post3 <- extract.samples( m3 , n=1e4 )
+
+plot( S ~ C , data=dat3 , col=rangi2 )
+#find mean posterior prediction for each parameter
+aC_map <- mean(post3$a)
+bC_map <- mean(post3$bC)
+curve( aC_map + bC_map*(x) , add=TRUE )
+```
+```{r, echo=FALSE}
+rmse(df$mean_strike_rate, aT_map + bT_map*(df$t2m_monthly_mean))
+rmse(df$mean_strike_rate, aR_map + bR_map*(df$msdwswrf_monthly_mean))
+rmse(df$mean_strike_rate, aC_map + bC_map*(df$cxp_monthly_mean))
+```
+
+```{r, echo=FLASE}
+
+```
+
+
+```{r, echo=FLASE}
+
+```
+
+
+```{r, echo=FLASE}
+
+```
+
+```{r, echo=FLASE}
+
+```
