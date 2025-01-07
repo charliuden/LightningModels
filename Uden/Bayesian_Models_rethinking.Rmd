@@ -265,7 +265,8 @@ print(rmse_table)
 ### Rethiking 
 
 The Paleo climate data used to drive LPJ-GUESS does not include convective available potential energy. 
-Goal: to build a lightning prediction model that uses climate variables included in the PalEON dataset.Compare model performance with that of models from Chen et al. 2021 
+Goal: to build a lightning prediction model that uses climate variables included in the PalEON dataset.
+Compare model performance with that of models from Chen et al. 2021 
 
 ```{r, echo=FALSE}
 dat <- list(
@@ -281,16 +282,10 @@ m1 <- ulam(
     sigma ~ dexp(1)
   ), data=dat, chains=2)
 
-
-
-```
-
-
-
-```{r}
 precis(m1)
 traceplot(m1)
 ```
+
 
 ```{r}
 post <- extract.samples( m1 , n=1e4 )
@@ -303,7 +298,9 @@ plot( S ~ T , data=dat , col=rangi2 )
 aT_map <- mean(post$a)
 bT_map <- mean(post$bT)
 sigma_map <- mean(post$sigma) #don't use sigma for the line, only to sample from a normal distribution if we were to apply the model
-curve( a_map + bT_map*(x) , add=TRUE )
+curve( aT_map + bT_map*(x) , add=TRUE )
+
+y_pred_m1 <- aT_map + bT_map*dat$T
 ```
 ### Short Wave Radiation
 
@@ -334,8 +331,9 @@ plot( S ~ R , data=dat2 , col=rangi2 )
 aR_map <- mean(post2$a)
 bR_map <- mean(post2$bR)
 sigma_map <- mean(post$sigma) #don't use sigma for the line, only to sample from a normal distribution if we were to apply the model
-curve( a_map + bR_map*(x) , add=TRUE )
+curve( aR_map + bR_map*(x) , add=TRUE )
 
+y_pred_m2 <- aR_map + bR_map*dat2$R
 ```
 
 ### Linear Model from Chen 2021 in Ulam
@@ -368,27 +366,276 @@ plot( S ~ C , data=dat3 , col=rangi2 )
 aC_map <- mean(post3$a)
 bC_map <- mean(post3$bC)
 curve( aC_map + bC_map*(x) , add=TRUE )
+
+y_pred_m3 <- aC_map + bC_map*dat3$C
 ```
+```{r}
+dat4 <- list(
+  S = df$mean_strike_rate,
+  P = df$mtpr_monthly_mean)
+
+m4 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + bP*P,
+    a ~ dnorm(0, 10), 
+    bP ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat4, chains=2)
+
+precis(m4)
+traceplot(m4)
+
+post4 <- extract.samples( m4 , n=1e4 )
+
+plot( S ~ P , data=dat4 , col=rangi2 )
+#find mean posterior prediction for each parameter
+aP_map <- mean(post4$a)
+bP_map <- mean(post4$bP)
+curve( aP_map + bP_map*(x) , add=TRUE )
+
+y_pred_m4 <- aP_map + bP_map*dat4$P
+```
+
+```{r}
+dat5 <- list(
+  S = df$mean_strike_rate,
+  W = df$i10fg_monthly_mean)
+
+m5 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + bW*W,
+    a ~ dnorm(0, 10), 
+    bW ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat5, chains=2)
+
+precis(m5)
+traceplot(m5)
+
+post5 <- extract.samples( m5 , n=1e4 )
+
+plot( S ~ W , data=dat5 , col=rangi2 )
+#find mean posterior prediction for each parameter
+aW_map <- mean(post5$a)
+bW_map <- mean(post5$bW)
+curve( aW_map + bW_map*(x) , add=TRUE )
+
+y_pred_m5 <- aW_map + bW_map*dat5$W
+```
+```{r}
+dat6 <- list(
+  S = df$mean_strike_rate,
+  SP = df$sp_monthly_mean)
+
+m6 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + bSP*SP,
+    a ~ dnorm(0, 10), 
+    bSP ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat6, chains=2)
+
+precis(m6)
+traceplot(m6)
+
+post6 <- extract.samples( m6 , n=1e4 )
+
+plot( S ~ SP , data=dat6 , col=rangi2 )
+#find mean posterior prediction for each parameter
+aSP_map <- mean(post6$a)
+bSP_map <- mean(post6$bSP)
+curve( aSP_map + bSP_map*(x) , add=TRUE )
+
+y_pred_m6 <- aSP_map + bSP_map*dat6$SP
+```
+
+```{r}
+dat7 <- list(
+  S = df$mean_strike_rate,
+  H = df$rh_monthly_mean)
+
+m7 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + bH*H,
+    a ~ dnorm(0, 10), 
+    bH ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat7, chains=2)
+
+precis(m7)
+traceplot(m7)
+
+post7 <- extract.samples( m7 , n=1e4 )
+
+plot( S ~ H , data=dat7 , col=rangi2 )
+#find mean posterior prediction for each parameter
+aH_map <- mean(post7$a)
+bH_map <- mean(post7$bH)
+curve( aH_map + bH_map*(x) , add=TRUE )
+
+y_pred_m7 <- aH_map + bH_map*dat7$H
+```
+
 ```{r, echo=FALSE}
-rmse(df$mean_strike_rate, aT_map + bT_map*(df$t2m_monthly_mean))
-rmse(df$mean_strike_rate, aR_map + bR_map*(df$msdwswrf_monthly_mean))
-rmse(df$mean_strike_rate, aC_map + bC_map*(df$cxp_monthly_mean))
+
+rmse_pl_op <- rmse(y, y_pred_pl_op) 
+rmse_sc <- rmse(y, y_pred_sc)
+rmse_li <- rmse(y, y_pred_li)
+rmse_np <- rmse(y, y_pred_np)
+
+rmse_m1 <- rmse(y, y_pred_m1)
+rmse_m2 <- rmse(y, y_pred_m2)
+rmse_m3 <- rmse(y, y_pred_m3)
+rmse_m4 <- rmse(y, y_pred_m4)
+rmse_m5 <- rmse(y, y_pred_m5)
+rmse_m6 <- rmse(y, y_pred_m6)
+rmse_m7 <- rmse(y, y_pred_m7)
+
+rmse_table <- as.data.frame(cbind(rmse_pl_op, rmse_sc, rmse_li, rmse_np, rmse_m1, rmse_m2, rmse_m3, rmse_m4, rmse_m5, rmse_m6, rmse_m7))
+print(rmse_table)
+
+```
+Calculate WAIC
+```{r}
+#need the log-likelihood of each observation i at each sample s from the posterior:
+n_samples <- 1000
+logprob <- sapply( 1:n_samples ,
+                   function(s) {
+                     mu <- post$a[s] + post$bT[s]*dat$T
+                     dnorm( dat$S , mu , post$sigma[s] , log=TRUE )
+                     } )
+#compute lppd (bayesian deviance) average samples in each row, take log liklihood, add all logs together. do this on the log scale
+n_cases <- nrow(df)
+lppd <- sapply( 1:n_cases , function(i) log_sum_exp(logprob[i,]) - log(n_samples) )
+#lppd: 
+sum(lppd)
+
+#pWAIC: 
+#compute variance across samples for each observation and add together
+pWAIC <- sapply( 1:n_cases , function(i) var(logprob[i,]) )
+sum(pWAIC)
+
+#WAIC
+-2*( sum(lppd) - sum(pWAIC) )
+
+#turn into function
+
+waic <- function(data, mu, post){
+  n_samples <- 1000
+  logprob <- sapply( 1:n_samples ,
+                   function(s) {
+                    mu = eval(parse(text = mu))
+                    dnorm( data$S, mu , post$sigma[s] , log=TRUE )
+                     } )
+  #compute lppd (bayesian deviance) average samples in each row, take log liklihood, add all logs together. do this on the log scale
+  n_cases <- length(data[[1]])
+  lppd <- sapply( 1:n_cases , function(i) log_sum_exp(logprob[i,]) - log(n_samples) )
+  
+  #pWAIC: 
+  #compute variance across samples for each observation and add together
+  pWAIC <- sapply( 1:n_cases , function(i) var(logprob[i,]) )
+
+  #WAIC
+  WAIC <- -2*( sum(lppd) - sum(pWAIC) )
+  
+  #calculate standard error
+  waic_vec <- -2*( lppd - pWAIC )
+  standardError <-sqrt( n_cases*var(waic_vec) )
+  
+  return(c(WAIC=WAIC, standardError=standardError))
+}
+mu <- "post$a[s] + post$bT[s]*data$T"
+WAIC_m1 <- waic(data=dat, mu, post)
+
+mu <- "post$a[s] + post$bR[s]*data$R"
+WAIC_m2 <- waic(data=dat2, mu, post2)
+
+mu <- "post$a[s] + post$bC[s]*data$C"
+WAIC_m3 <- waic(data=dat3, mu, post=post3)
+
+mu <- "post$a[s] + post$bP[s]*data$P"
+WAIC_m4 <- waic(dat4, mu, post4)
+
+mu <- "post$a[s] + post$bW[s]*data$W"
+WAIC_m5 <- waic(dat5, mu, post5)
+
+mu <- "post$a[s] + post$bSP[s]*data$SP"
+WAIC_m6 <- waic(dat6, mu, post6)
+
+mu <- "post$a[s] + post$bH[s]*data$H"
+WAIC_m7 <- waic(dat7, mu, post7)
+
+WAIC_table <- as.data.frame(rbind(m1=WAIC_m1, m2=WAIC_m2, m3=WAIC_m3, m4=WAIC_m4, m5=WAIC_m5, m6=WAIC_m6, m7=WAIC_m7))
+print(WAIC_table)
+
+```
+
+Of the five variables available in the PalEON dataset, short wave radiation (m2) has lowest RMSE and WAIC score, indicating good fit and predictiv permormance. However, cape x precipitation (m3) performed best. 
+
+```{r, echo=FLASE}
+ggplot() + geom_point(data = df, aes(x=msdwswrf_monthly_mean, y=mean_strike_rate, col=t2m_monthly_mean))
+```
+
+
+```{r, echo=FLASE}
+ggplot() + geom_point(data = df, aes(x=msdwswrf_monthly_mean, y=t2m_monthly_mean, col = mean_strike_rate))
+ggplot() + geom_point(data = df, aes(x=msdwswrf_monthly_mean, y=mtpr_monthly_mean, col = mean_strike_rate))
+ggplot() + geom_point(data = df, aes(x=msdwswrf_monthly_mean, col=mtpr_monthly_mean, y = mean_strike_rate))
+```
+```{r}
+ggplot() + geom_point(data = df, aes(x=rxp,y = mean_strike_rate))
+```
+
+```{r, echo=FLASE}
+dat8 <- list(
+  S = df$mean_strike_rate,
+  P = df$mtpr_monthly_mean, 
+  R = df$msdwswrf_monthly_mean)
+
+m8 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + bP*P + bR*R,
+    a ~ dnorm(0, 10), 
+    bP ~ dnorm(0, 10), 
+    bR ~ dnorm(0, 10),
+    sigma ~ dexp(1)
+  ), data=dat8, chains=2)
+
+precis(m8)
+traceplot(m8)
+
+post8 <- extract.samples( m8 , n=1e4 )
+
+plot( S ~ R , data=dat8 , col=P )
+#find mean posterior prediction for each parameter
+a_map <- mean(post8$a)
+bP_map <- mean(post8$bP)
+bR_map <- mean(post8$bR)
+mu <-  a_map + bP_map*dat8$P + bR_map*dat8$R
+y_pred_m8 <- dnorm( dat8$S, mu , post8$sigma)
+#curve( a_map + bP_map*(x) + bR_map*(x) , add=TRUE )
+plot(dat8$R, y_pred_m8)
+y_pred_m8 <- a_map + bP_map*dat8$P + bR_map*dat8$R
+plot(dat8$R, y_pred_m8)
+
+mu <- "post$a[s] + post$bP[s]*data$P+ post$bR[s]*data$R"
+WAIC_m8 <- waic(dat8, mu, post8)
+WAIC_m8
 ```
 
 ```{r, echo=FLASE}
 
-```
 
 
-```{r, echo=FLASE}
-
-```
 
 
-```{r, echo=FLASE}
 
-```
 
-```{r, echo=FLASE}
+
 
 ```
