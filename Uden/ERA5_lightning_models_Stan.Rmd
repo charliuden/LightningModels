@@ -1,0 +1,665 @@
+---
+title: "Lightning Models"
+output: html_document
+date: "2024-08-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo=FALSE}
+library(ggplot2)
+library(dplyr)
+library(rethinking)
+library(Metrics)
+library(ramify)
+library(cowplot)
+library(gridExtra)
+library(ggpointdensity)
+library(viridis)
+library(stats)
+```
+
+
+Begin by standardizing all variables: Z = (X − µ)/σ
+
+```{r, echo=FALSE}
+data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummaries_2005-2010_NEclip.csv")[,2:16]
+data <- data %>%
+  mutate(strikes = (mean_strike_rate - mean(mean_strike_rate))/sd(mean_strike_rate)) %>% #standardized 
+  mutate(strikes_norm = (mean_strike_rate-min(mean_strike_rate))/(max(mean_strike_rate)-min(mean_strike_rate))) %>% #normalized 
+  mutate(cape = (cape_monthly_mean - mean(cape_monthly_mean))/sd(cape_monthly_mean)) %>%
+  mutate(precip = (mtpr_monthly_mean - mean(mtpr_monthly_mean))/sd(mtpr_monthly_mean)) %>%
+  mutate(cxp = (cxp_monthly_mean - mean(cxp_monthly_mean))/sd(cxp_monthly_mean)) %>%
+  mutate(tair = (t2m_monthly_mean - mean(t2m_monthly_mean))/sd(t2m_monthly_mean)) %>%
+  mutate(wind = (i10fg_monthly_mean - mean(i10fg_monthly_mean))/sd(i10fg_monthly_mean)) %>%
+  mutate(swr = (msdwswrf_monthly_mean - mean(msdwswrf_monthly_mean))/sd(msdwswrf_monthly_mean)) %>%
+  mutate(sp = (sp_monthly_mean - mean(sp_monthly_mean))/sd(sp_monthly_mean)) %>%
+  mutate(rh = (rh_monthly_mean - mean(rh_monthly_mean))/sd(rh_monthly_mean)) 
+
+
+  
+df <- data[,c("strikes", "strikes_norm", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+head(df)
+
+plot(df)
+```
+
+Random Forest for measures of variable importance
+
+Mean Decrease Accuracy (%IncMSE): 
+ - remove variables from the model and asses which have the greatest impact on model accuracy.
+ - Higher the value of mean decrease accuracy or mean decrease gini score , 
+       higher the importance of the variable in the model. 
+ - tells you effect of randomly shuffling values of a variable on increasing mse of model predictions
+ - a higher number indicates that the variable is more important
+
+ Mean Decrease Gini or Increase in Node Purity (IncNodePurity):
+ - expresses the change in the homogeneity of the of the groups created by the trees 
+     (using the Gini coefficient as a measure). 
+ - What is expressed is the decrease in said purity if a particular variable 
+      has no information. If a variable has no information to begin with, 
+      the decrase would be zero. (from: https://www.reagro.org/methods/statistical/randomforest.html)
+
+
+```{r}
+#apply random forest:
+rf <-randomForest(strikes~.,data=df, ntree=500) 
+print(rf)
+
+#mtry: Number of random variables used in each tree
+# - reducing mtry reduces correlation and strength. 
+# - the oob error rate tells you what value of mtry is optimal
+
+mtry <- tuneRF(df[-1],df$strikes, ntreeTry=500,
+               stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+#looking for mtry for the lowest oob error rate 
+print(mtry)
+print(best.m) 
+
+#apply best mtry to model
+rf <-randomForest(strikes~.,data=df, mtry=best.m, importance=TRUE,ntree=500)
+print(rf)
+
+#Evaluate variable importance
+importance(rf)
+varImpPlot(rf)
+```
+# Using Stan to reparameterize CAPE x Precipitation models from Chen et al. 2021 
+
+```{r}
+ggplot(data = df, mapping = aes(x = cxp, y = strikes)) +
+  geom_pointdensity() +
+  scale_color_viridis() + 
+  xlab(expression(Standardized~CAPE~x~Precip~(W~m^-2))) +
+  ylab(expression(Standardized~Lightning~flash~rate~(number~per~km^2~per~month))) + 
+  ggtitle("May-August 2005-2010 n=3246")+
+  guides(alpha="none", color="none") + 
+  theme_minimal()
+
+```
+
+
+### Power Law: FR = a(CAPE × Precip)^b
+With the parameters a and b derived from the optimization at the log-log scale (that is, a linear regression between logarithmic values of flash rate and CAPE × Precip were performed in practice). Similar to Romps et al.36, this model assumed that the lightning flash rate depends on the product of CAPE and Precip. The coefficient b allows nonlinear impacts to be represented in this form. 
+
+---could not get this model to work---
+
+### Power law (linear opt) 
+A variation of the power law model, but with the least squares optimization obtained without a logarithmic transformation. 
+
+```{r}
+dat <- list(
+  S = df$strikes,
+  CAPE = df$cape)
+
+m1 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a * pow(CAPE, b),
+    a ~ dnorm(0, 5), 
+    b ~ dnorm(0, 5), 
+    sigma ~ dexp(1)
+  ), data=dat, chains=2)
+
+precis(m1)
+traceplot(m1)
+
+post <- extract.samples( m1 , n=1e4 )
+precis(post)
+
+plot( S ~ CAPE , data=dat , col=rangi2 )
+
+#find mean posterior prediction for each parameter
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+sigma_map <- mean(post$sigma) #don't use sigma for the line, only to sample from a normal distribution if we were to apply the model
+
+plot( S ~ CAPE , data=dat , col=rangi2 )
+a_map <- 1
+b_map <- 2
+curve( a_map*((x)^b_map) , add=TRUE )
+
+y_pred_mu <- a_map + dat$CAPE^b_map
+y_pred_m1 <- rnorm(dat$CAPE, y_pred_mu, sigma_map)
+
+plot(dat$CAPE, y_pred_m1)
+```
+
+###Linear: FR = a(CAPE × Precip) + b
+
+```{r}
+dat <- list(
+  S = df$strikes,
+  CXP = df$cxp)
+
+m2 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a * CXP + b,
+    a ~ dnorm(0, 5), 
+    b ~ dnorm(0, 5), 
+    sigma ~ dexp(1)
+  ), data=dat, chains=2)
+
+precis(m2)
+traceplot(m2)
+
+post <- extract.samples( m2 , n=1e4 )
+precis(post)
+
+#find mean posterior prediction for each parameter
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+sigma_map <- mean(post$sigma) #don't use sigma for the line, only to sample from a normal distribution if we were to apply the model
+#use posterior prediction to calculate mean (mu) strike rate from CAPE
+y_pred_mu <- a_map * dat$CXP + b_map
+#use mu and sigma to sample from normal distribution
+y_pred_m1 <- rnorm(dat$CXP, y_pred_mu, sigma_map)
+
+d <- as.data.frame(cbind(S=dat$S, CXP=dat$CXP, y_pred_mu, y_pred_m1))
+
+ggplot(data=d, aes(x=CXP, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=CXP, y=y_pred_m1)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+rmse_m2 <- rmse(d$S, d$y_pred_m1)
+```
+
+
+```{r}
+m2.2 <- lm(strikes ~ cxp, data=df)
+summary(m2.2)
+
+a <- summary(m2.2)$coefficients[2,1]
+b <- summary(m2.2)$coefficients[1,1]
+
+y_pred_m2.2 <- a*df$cxp + b
+
+d <- as.data.frame(cbind(S=df$strikes, CXP=df$cxp, y_pred_m2.2))
+
+ggplot(data=d, aes(x=CXP, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_m2.2)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+rmse_m2.2 <- rmse(d$S, d$y_pred_m2.2)
+```
+
+###WAIC and Standard Error Calculations
+WAIC: Measure of predictive power. lower values are better. This functioin will only work on models built in stan using the rethinking package. 
+
+
+```{r}
+waic <- function(data, mu, sigma, post, include_sigma){
+  
+  n_samples <- 1000
+  
+  if (include_sigma == TRUE) {
+    logprob <- sapply( 1:n_samples ,
+                   function(s) {
+                    mu = eval(parse(text = mu))
+                    sigma = eval(parse(text = sigma))
+                    dnorm( data$S, mu , sigma , log=TRUE )
+                     } )
+  } else {
+    logprob <- sapply( 1:n_samples ,
+                   function(s) {
+                    mu = eval(parse(text = mu))
+                    dnorm( data$S, mu , post$sigma[s] , log=TRUE )
+                     } )
+  }
+
+  #compute lppd (bayesian deviance) average samples in each row, take log liklihood, add all logs together. do this on the log scale
+  n_cases <- length(data[[1]])
+  lppd <- sapply( 1:n_cases , function(i) log_sum_exp(logprob[i,]) - log(n_samples) )
+  
+  #pWAIC: 
+  #compute variance across samples for each observation and add together
+  pWAIC <- sapply( 1:n_cases , function(i) var(logprob[i,]) )
+
+  #WAIC
+  WAIC <- -2*( sum(lppd) - sum(pWAIC) )
+  
+  #calculate standard error
+  waic_vec <- -2*( lppd - pWAIC )
+  standardError <-sqrt( n_cases*var(waic_vec) )
+  
+  return(c(WAIC=WAIC, standardError=standardError))
+}
+
+mu <- "post$a[s]*data$CXP + post$b[s]"
+WAIC_m2 <- waic(data=dat, mu, sigma=NA, post, include_sigma=FALSE)
+```
+
+Since the random forest identified CAPE as the most important variable, let's try applying a stan model to a model that predicts lightning strike rate from cape. 
+
+```{r, echo=FALSE}
+dat <- list(
+  S = df$strikes,
+  CAPE = df$cape)
+
+m3 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + b*CAPE,
+    a ~ dnorm(0, 10), 
+    b ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat, chains=2)
+
+precis(m3)
+traceplot(m3)
+
+post <- extract.samples( m3 , n=1e4 )
+precis(post)
+```
+
+Make predictions from posterior:
+```{r}
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+sigma_map <- mean(post$sigma) 
+
+y_pred_mu <- a_map * dat$CAPE + b_map
+y_pred_m3 <- rnorm(dat$CAPE, y_pred_mu, sigma_map)
+
+d <- as.data.frame(cbind(S=dat$S, CAPE=dat$CAPE, y_pred_mu, y_pred_m3))
+
+ggplot(data=d, aes(x=CAPE, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=CAPE, y=y_pred_m3)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+rmse_m3 <- rmse(d$S, d$y_pred_m3)
+
+mu <- "post$a[s] + post$b[s]*data$CAPE"
+WAIC_m3 <- waic(data=dat, mu, post)
+
+```
+
+This looks awful! Mu does not appear to change at all with CAPE! Let's see if this is true - does the observed mean lightning rate change with CAPE?
+
+```{r}
+#function to calculate mean flash rate at binned intervals of a variable (x)
+calculate_mean_strikes <- function(data, x, n_bins){
+  #data=df
+  #x="cape"
+  #y=strikes
+  
+  
+  bin_size <- (max(data[[x]])-min(data[[x]]))/n_bins
+
+  bins <- seq(min(data[[x]]), max(data[[x]]), bin_size)
+  
+  strike_means <- rep(0, length(bins))
+  
+  for (i in seq(1:length(bins))){
+    low <- bins[i]
+    high <- low+bin_size
+    x_i <- data %>% filter(between(get(x, data), low, high))
+    if (nrow(x_i) >= 1) {
+      mean <- mean(x_i$strikes)
+      } else {
+        mean <-  NA
+        }
+    strike_means[i] <- mean
+  }
+  
+  d <- as.data.frame(cbind(bins, strike_means))
+  return(d) 
+}
+
+d <- calculate_mean_strikes(data=df, x="cape", n_bins=60)
+
+plot(d$bins, d$strike_means)
+```
+
+What about standard deviation - how does that change with cape?
+
+```{r}
+#function to calculate standard deviation of flash rate at binned intervals of a variable (x)
+calculate_sd_strikes <- function(data, x, n_bins){
+
+  bin_size <- (max(data[[x]])-min(data[[x]]))/n_bins
+
+  bins <- seq(min(data[[x]]), max(data[[x]]), bin_size)
+  
+  strike_sd <- rep(0, length(cape_bins))
+  
+  for (i in seq(1:length(bins))){
+    low <- bins[i]
+    high <- low+bin_size
+    x_i <- data %>% filter(between(get(x, data), low, high))
+    if (nrow(x_i) >= 1) {
+      sd <- sd(x_i$strikes)
+      } else {
+        sd <-  NA
+        }
+    strike_sd[i] <- sd
+  }
+  
+  d <- as.data.frame(cbind(bins, strike_sd))
+  return(d) 
+}
+
+d <- calculate_sd_strikes(data=df, x="cape", n_bins=60)
+
+plot(d$bins, d$strike_sd)
+
+```
+Let's try to model the change in mu AND sigma with CAPE:
+
+```{r}
+dat <- list(
+  S = df$strikes,
+  CAPE = df$cape)
+
+m3.2 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + b*CAPE,
+    sigma <- c + d*CAPE,
+    a ~ dnorm(0, 10), 
+    b ~ dnorm(0, 10), 
+    c ~ dnorm(0, 10), 
+    d ~ dnorm(0, 10)
+  ), data=dat, chains=2)
+
+precis(m3.2)
+traceplot(m3.2)
+
+post <- extract.samples( m3.2 , n=1e4 )
+precis(post)
+
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+c_map <- mean(post$c)
+d_map <- mean(post$d)
+
+y_pred_mu <- a_map + b_map*dat$CAPE
+y_pred_sigma <- c_map + d_map*dat$CAPE
+y_pred_m3.2 <- rnorm(dat$CAPE, y_pred_mu, y_pred_sigma)
+
+d <- as.data.frame(cbind(S=dat$S, CAPE=dat$CAPE, y_pred_mu, y_pred_sigma, y_pred_m3.2))
+
+ggplot(data=d, aes(x=CAPE, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=CAPE, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_sigma)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+rmse_m3.2 <- rmse(d$S, d$y_pred_m3.2)
+
+mu <- "post$a[s] + post$b[s]*data$CAPE"
+sigma <- "post$c[s] + post$d[s]*data$CAPE"
+WAIC_m3.2 <- waic(data=dat, mu, sigma, post, include_sigma = TRUE)
+```
+
+Next, let's try short wave radiation, by first looking at changes in the mean and sd flash rate across short wave radiation bins:
+
+```{r}
+d <- calculate_mean_strikes(data=df, x="swr", n_bins=60)
+d <- cbind(d, strike_sd=calculate_sd_strikes(data=df, x="swr", n_bins=60)$strike_sd)
+plot(d$bins, d$strike_means)
+plot(d$bins, d$strike_sd)
+```
+Like before, there will a model that includes changes in mu over short wave radiation (m4), and another that includes changes in mu and sigma over short wave (m4.2) radiation. 
+```{r}
+dat <- list(
+  S = df$strikes,
+  SWR = df$swr)
+
+m4 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + b*SWR,
+    a ~ dnorm(0, 10), 
+    b ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat, chains=2)
+
+precis(m4)
+traceplot(m4)
+
+post <- extract.samples( m4 , n=1e4 )
+precis(post)
+
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+sigma_map <- mean(post$sigma)
+
+y_pred_mu <- a_map + b_map*dat$SWR
+y_pred_m4 <- rnorm(dat$SWR, y_pred_mu, sigma_map)
+
+d <- as.data.frame(cbind(S=dat$S, SWR=dat$SWR, y_pred_mu, y_pred_m4))
+
+ggplot(data=d, aes(x=SWR, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=SWR, y=y_pred_m4)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+rmse_m4 <- rmse(d$S, d$y_pred_m4)
+
+mu <- "post$a[s] + post$b[s]*data$SWR"
+WAIC_m4 <- waic(data=dat, mu, sigma=NA, post, include_sigma = FALSE)
+```
+
+
+```{r}
+dat <- list(
+  S = df$strikes,
+  SWR = df$swr)
+
+m4.2 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + b*SWR,
+    sigma <- c + d*SWR,
+    a ~ dnorm(0, 10), 
+    b ~ dnorm(0, 10), 
+    c ~ dnorm(0, 10), 
+    d ~ dnorm(0, 10)
+  ), data=dat, chains=2)
+
+precis(m4.2)
+traceplot(m4.2)
+
+post <- extract.samples( m4.2 , n=1e4 )
+precis(post)
+
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+c_map <- mean(post$c)
+d_map <- mean(post$d)
+
+y_pred_mu <- a_map + b_map*dat$SWR
+y_pred_sigma <- c_map + d_map*dat$SWR
+y_pred_m4.2 <- rnorm(dat$SWR, y_pred_mu, y_pred_sigma)
+
+d <- as.data.frame(cbind(S=dat$S, SWR=dat$SWR, y_pred_mu, y_pred_sigma, y_pred_m4.2))
+
+ggplot(data=d, aes(x=SWR, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=SWR, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_sigma)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=SWR, y=y_pred_m4.2)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+
+rmse_m4.2 <- rmse(d$S, d$y_pred_m4.2)
+
+mu <- "post$a[s] + post$b[s]*data$SWR"
+sigma <- "post$c[s] + post$d[s]*data$SWR"
+WAIC_m4.2 <- waic(data=dat, mu, sigma, post, include_sigma = TRUE)
+```
+
+Next, relative humidity:
+```{r}
+d <- calculate_mean_strikes(data=df, x="rh", n_bins=60)
+d <- cbind(d, strike_sd=calculate_sd_strikes(data=df, x="rh", n_bins=60)$strike_sd)
+plot(d$bins, d$strike_means)
+plot(d$bins, d$strike_sd)
+```
+
+```{r}
+dat <- list(
+  S = df$strikes,
+  RH = df$rh)
+
+m5 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + b*RH,
+    a ~ dnorm(0, 10), 
+    b ~ dnorm(0, 10), 
+    sigma ~ dexp(1)
+  ), data=dat, chains=2)
+
+precis(m5)
+traceplot(m5)
+
+post <- extract.samples( m5 , n=1e4 )
+precis(post)
+
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+sigma_map <- mean(post$sigma)
+
+y_pred_mu <- a_map + b_map*dat$RH
+y_pred_m5 <- rnorm(dat$RH, y_pred_mu, sigma_map)
+
+d <- as.data.frame(cbind(S=dat$S, RH=dat$RH, y_pred_mu, y_pred_m5))
+
+ggplot(data=d, aes(x=RH, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=RH, y=y_pred_m5)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+rmse_m5 <- rmse(d$S, d$y_pred_m5)
+
+mu <- "post$a[s] + post$b[s]*data$RH"
+WAIC_m5 <- waic(data=dat, mu, sigma=NA, post, include_sigma = FALSE)
+```
+
+```{r}
+dat <- list(
+  S = df$strikes,
+  RH = df$rh)
+
+m5.2 <- ulam(
+  alist(
+    S ~ dnorm(mu, sigma), 
+    mu <- a + b*RH,
+    sigma <- c + d*RH,
+    a ~ dnorm(0, 10), 
+    b ~ dnorm(0, 10), 
+    c ~ dnorm(0, 10), 
+    d ~ dnorm(0, 10)
+  ), data=dat, chains=2)
+
+precis(m5.2)
+traceplot(m5.2)
+
+post <- extract.samples( m5.2 , n=1e4 )
+precis(post)
+
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+c_map <- mean(post$c)
+d_map <- mean(post$d)
+
+y_pred_mu <- a_map + b_map*dat$RH
+y_pred_sigma <- c_map + d_map*dat$RH
+y_pred_m5.2 <- rnorm(dat$RH, y_pred_mu, y_pred_sigma)
+
+d <- as.data.frame(cbind(S=dat$S, RH=dat$RH, y_pred_mu, y_pred_sigma, y_pred_m5.2))
+
+ggplot(data=d, aes(x=RH, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=RH, y=S)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_sigma)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+ggplot(data=d, aes(x=RH, y=y_pred_m5.2)) + geom_point(aes(alpha=0.1)) + 
+  geom_line(aes(y=y_pred_mu)) +
+  geom_pointdensity() +
+  scale_color_viridis() 
+
+
+rmse_m5.2 <- rmse(d$S, d$y_pred_m5.2)
+
+mu <- "post$a[s] + post$b[s]*data$RH"
+sigma <- "post$c[s] + post$d[s]*data$RH"
+WAIC_m5.2 <- waic(data=dat, mu, sigma, post, include_sigma = TRUE)
+```
+
+
+```{r}
+summary1 <- as.data.frame(rbind(WAIC_m1, WAIC_m2, WAIC_m3, WAIC_m3.2, WAIC_m4, WAIC_m4.2, WAIC_m5, WAIC_m5.2))
+summary2 <- as.data.frame(rbind(rmse_m1, rmse_m2, rmse_m3, rmse_m3.2, rmse_m4, rmse_m4.2, rmse_m5, rmse_m5.2))
+
+cbind(summary1, summary2)
+
+```
+

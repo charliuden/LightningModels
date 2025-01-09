@@ -1,0 +1,633 @@
+---
+title: "Beta models in Rethinking"
+author: "Charlotte Uden"
+date: "2024-11-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(rethinking)
+library(dplyr)
+library(stats)
+library(caret)
+```
+
+
+```{r}
+data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummerSummaries_2005-2010_NEclip.csv")[,2:16]
+colnames(data) <- c("lat", "lon", "year", "strikes", "cape", "precip", "cxp", "d2m", "tair", "wind", "swr", "sp", "rh", "tmin", "tmax")
+
+## 80% of the sample size
+sample_size <- floor(0.8 * nrow(data))
+
+## set the seed to make partition reproducible
+set.seed(123)
+train_index <- sample(seq_len(nrow(data)), size = sample_size)
+
+train <- data[train_index, ]
+test <- data[-train_index, ]
+
+```
+
+Normalize 
+```{r}
+#save min and max (normalization parameters?):
+#-----
+min_strikes <- min(train$strikes)
+max_strikes <- max(train$strikes)
+min_cxp <- min(train$cxp)
+max_cxp <- max(train$cxp)
+min_cape <- min(train$cape)
+max_cape <- max(train$cape)
+min_precip <- min(train$precip)
+max_precip <- max(train$precip)
+min_tair <- min(train$tair)
+max_tair <- max(train$tair)
+min_wind <- min(train$wind)
+max_wind <- max(train$wind)
+min_swr <- min(train$swr)
+max_swr <- max(train$swr)
+min_sp <- min(train$sp)
+max_sp <- max(train$sp)
+min_rh <- min(train$rh)
+max_rh <- max(train$rh)
+#-----
+
+train <- train %>%
+  mutate(strikes = (strikes-min(strikes))/(max(strikes)-min(strikes))) %>% #normalized 
+  mutate(cape = (cape-min(cape))/(max(cape)-min(cape))) %>%
+  mutate(precip = (precip-min(precip))/(max(precip)-min(precip))) %>%
+  mutate(cxp = (cxp-min(cxp))/(max(cxp)-min(cxp))) %>%
+  mutate(tair = (tair-min(tair))/(max(tair)-min(tair))) %>%
+  mutate(wind = (wind-min(wind))/(max(wind)-min(wind))) %>%
+  mutate(swr = (swr-min(swr))/(max(swr)-min(swr))) %>%
+  mutate(sp = (sp-min(sp))/(max(sp)-min(sp))) %>%
+  mutate(rh = (rh-min(rh))/(max(rh)-min(rh))) 
+
+train <- train[,c("strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+head(train)
+
+plot(train)
+
+#use the min and max values from the train set to normalize the test set 
+test <- test %>%
+  mutate(strikes = (strikes - min_strikes)/(max_strikes-min_strikes)) %>% #normalized 
+  mutate(cape = (cape - min_cape)/(max_cape-min_cape)) %>%
+  mutate(precip = (precip - min_precip)/(max_precip-min_precip)) %>%
+  mutate(cxp = (cxp - min_cxp)/(max_cxp-min_cxp)) %>%
+  mutate(tair = (tair - min_tair)/(max_tair-min_tair)) %>%
+  mutate(wind = (wind - min_wind)/(max_wind-min_wind)) %>%
+  mutate(swr = (swr - min_swr)/(max_swr-min_swr)) %>%
+  mutate(sp = (sp - min_sp)/(max_sp-min_sp)) %>%
+  mutate(rh = (rh - min_rh)/(max_rh-min_rh)) 
+
+#all test values must be greater than 0 and less 1 - normalizing the test set may produce such values
+test$cape[test$cape < 0] = 0
+test$cxp[test$cxp < 0] = 0
+test$precip[test$precip < 0] = 0
+test$tair[test$tair < 0] = 0
+test$wind[test$wind < 0] = 0
+test$swr[test$swr < 0] = 0
+test$sp[test$sp < 0] = 0
+test$rh[test$rh < 0] = 0
+
+test$cape[test$cape > 1] = 1
+test$cxp[test$cxp > 1] = 1
+test$precip[test$precip > 1] = 1
+test$tair[test$tair > 1] = 1
+test$wind[test$wind > 1] = 1
+test$swr[test$swr > 1] = 1
+test$sp[test$sp > 1] = 1
+test$rh[test$rh > 1] = 1
+
+```
+
+
+```{r}
+```
+
+```{r}
+
+hist(train$strikes, 
+     main="Observed Lightning strike rate", 
+     xlab=expression(Normalized~Lightning~flash~rate~(number~per~km^2~per~month)),
+     breaks=20)
+
+sigma <- sd(train$strikes)
+mu <- mean(train$strikes)
+alpha <- (mu^2 - mu^3 - mu*sigma^2) / (sigma^2)
+beta <- (mu - 2*mu^2 + mu^3 - sigma^2 + mu*sigma^2) / (sigma^2)
+
+#simulate strike rate from beta distribution:
+hist(rbeta(1000, ((mu*beta)/(1-mu)), beta), 
+     main="Lightning strike rate simulated from the beta distribution", 
+     xlab=expression(Normalized~Lightning~flash~rate~(number~per~km^2~per~month)),
+     breaks=20)
+hist(rbeta(1000, alpha, beta), 
+     main="Lightning strike rate simulated from the beta distribution", 
+     xlab=expression(Normalized~Lightning~flash~rate~(number~per~km^2~per~month)),
+     breaks=20)
+
+#simulate strike rate from normal distribution:
+hist(rnorm(1000, mean(train$strikes), sd(train$strikes)), 
+     main="Lightning strike rate simualted from the normal distribution", 
+     xlab=expression(Normalized~Lightning~flash~rate~(number~per~km^2~per~month)),
+     breaks=20)
+
+
+
+```
+
+```{r}
+epsilon <- 1e-6  # Small value
+train$strikes <- pmin(pmax(train$strikes, epsilon), 1 - epsilon)
+```
+
+
+
+```{r}
+
+dat <- list(
+  S = train$strikes)
+
+m0 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha ~ dnorm(0,5),
+    beta ~ dnorm(0,5)
+  ), data=dat , chains=2 , log_lik=TRUE)
+
+precis( m0 )
+plot( coeftab( m0 ) , pars=c("alpha","beta") )
+```
+
+
+```{r}
+
+dat <- list(
+  S = train$strikes,
+  CAPE = train$cape)
+
+m1 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- a_alpha + b_alpha * CAPE,
+    beta <- a_beta + b_beta *CAPE,
+    a_alpha ~ dnorm(0,10),
+    b_alpha ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m1)
+print(summary_table <- precis(m1))
+
+plot( coeftab( m1 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- mean_a_alpha + mean_b_alpha * test$cape
+beta <- mean_a_beta + mean_b_beta * test$cape
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$cape, pred)
+plot(test$cape, test$strikes)
+plot(pred, test$strikes)
+
+rmse_cape <- RMSE(test$strikes, pred)
+
+```
+
+```{r}
+
+dat <- list(
+  S = train$strikes,
+  CAPE = train$cape)
+
+m1.1 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- exp(a_alpha + b_alpha * CAPE)+ 1e-6,
+    beta <- exp(a_beta + b_beta *CAPE)+ 1e-6,
+    a_alpha ~ dnorm(3,1),
+    b_alpha ~ dnorm(3,1),
+    a_beta ~ dnorm(3,1),
+    b_beta ~ dnorm(3,1)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m1.1)
+print(summary_table <- precis(m1.1))
+
+plot( coeftab( m1.1 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- exp(mean_a_alpha + mean_b_alpha * test$cape)
+beta <- exp(mean_a_beta + mean_b_beta * test$cape)
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$cape, alpha)
+plot(test$cape, beta)
+
+check <- data.frame(alpha = alpha,
+           beta = beta,
+           cape = test$cape, 
+           obs_strikes = test$strikes)
+ggplot(data=check) + geom_point(aes(x=cape, y=obs_strikes)) + geom_line(aes(x=cape, y=beta))
+
+plot(test$cape, pred)
+plot(test$cape, test$strikes)
+plot(pred, test$strikes)
+
+rmse_cape <- RMSE(test$strikes, pred)
+
+```
+
+
+```{r}
+dat <- list(
+   S = train$strikes,
+   CAPE = train$cape)
+
+ m1.2 <- ulam(
+   alist(
+     S ~ dbeta( alpha , beta ),
+     alpha <- ((mu * beta)/(1 - mu)),
+     mu <- a_mu + b_mu * CAPE,
+     beta <- exp(a_beta + b_beta * CAPE),
+     a_mu ~ dnorm(0,10),
+     b_mu ~ dnorm(0,10),
+     a_beta ~ dnorm(0,10),
+     b_beta ~ dnorm(0,10)
+   ), data=dat , chains=2 , log_lik=TRUE, cores = 2)
+
+#start = list(a_mu = 0.3, b_mu = -1, a_beta = 50, b_beta = -20) 
+ 
+summary_table <- precis(m1.2)
+print(summary_table <- precis(m1.2))
+plot( coeftab( m1.2 ) , pars=c("a_mu","b_mu", "a_beta", "b_beta" ) )
+
+#predict
+
+mean_a_alpha <- summary_table["a_mu", "mean"]
+mean_b_alpha <- summary_table["b_mu", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+mu <- mean_a_alpha + mean_b_alpha * test$cape
+beta <- exp(mean_a_beta + mean_b_beta * test$cape)
+alpha <- ((mu * beta)/(1 - mu))
+
+plot(test$cape, mu)
+plot(test$cape, beta)
+plot(test$cape, alpha)
+
+check <- data.frame(alpha = alpha,
+           beta = beta,
+           mu = mu,
+           cape = test$cape, 
+           obs_strikes = test$strikes)
+
+ggplot(data=check) + geom_point(aes(x=cape, y=obs_strikes)) + geom_line(aes(x=cape, y=mu))
+
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$cape, pred)
+plot(test$cape, test$strikes)
+plot(pred, test$strikes)
+
+rmse_cape.1 <- RMSE(test$strikes, pred)
+```
+
+```{r}
+dat <- list(
+   S = train$strikes,
+   CAPE = train$cape)
+
+ m1.3 <- ulam(
+   alist(
+     S ~ dbeta( alpha , beta ),
+     alpha <- ((mu * beta)/(1 - mu)),
+     mu <- a_mu * (1 - exp(b_mu * CAPE) + c_mu),
+     beta <- c_beta + (a_beta - c_beta) * exp( b_beta * CAPE),
+     a_mu ~ dnorm(0,10),
+     b_mu ~ dnorm(0,10),
+     c_mu ~ dnorm(0,10),
+     a_beta ~ dnorm(0,10),
+     b_beta ~ dnorm(0,10),
+     c_beta ~ dnorm(0,10)
+   ), data=dat , chains=2 , log_lik=TRUE, start = list(a_mu = 0.3, b_mu = -1, c_mu=0.05, a_beta = 50, b_beta = -20, c_beta=10) )
+
+
+#summary_table <- precis(m1.3)
+# print(summary_table <- precis(m1.3))
+# #look at traceplots
+# #traceplot(m1.3)
+# #look at parameter estimates
+# plot( coeftab( m1.3 ) , pars=c("a_mu","b_mu", "c_mu", "a_beta", "b_beta", "c_beta" ) )
+```
+
+
+
+```{r}
+dat <- list(
+  S = train$strikes,
+  CXP = train$cxp)
+
+m2 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- a_alpha + b_alpha *CXP,
+    beta <- a_beta + b_beta *CXP,
+    a_alpha ~ dnorm(0,10),
+    b_alpha ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m2)
+print(summary_table <- precis(m2))
+
+plot( coeftab( m2 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- mean_a_alpha + mean_b_alpha * test$cxp
+beta <- mean_a_beta + mean_b_beta * test$cxp
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$cxp, pred)
+plot(test$cxp, test$strikes)
+plot(pred, test$strikes)
+
+rmse_cxp <- RMSE(test$strikes, pred)
+```
+
+
+```{r}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr)
+
+m3 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- a_alpha + b_alpha * SWR,
+    beta <- a_beta + b_beta * SWR,
+    a_alpha ~ dnorm(0,10),
+    b_alpha ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m3)
+print(summary_table <- precis(m3))
+
+plot( coeftab( m3 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- mean_a_alpha + mean_b_alpha * test$swr
+beta <- mean_a_beta + mean_b_beta * test$swr
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$swr, pred)
+plot(test$swr, test$strikes)
+plot(pred, test$strikes)
+
+rmse_swr <- RMSE(test$strikes, pred)
+
+```
+
+
+
+```{r}
+dat <- list(
+  S = train$strikes,
+  RH = train$rh)
+
+m4 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- a_alpha + b_alpha * RH,
+    beta <- a_beta + b_beta *RH,
+    a_alpha ~ dnorm(0,10),
+    b_alpha ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m4)
+print(summary_table <- precis(m4))
+
+plot( coeftab( m4 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- mean_a_alpha + mean_b_alpha * test$rh
+beta <- mean_a_beta + mean_b_beta * test$rh
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$rh, pred)
+plot(test$rh, test$strikes)
+plot(pred, test$strikes)
+
+rmse_rh <- RMSE(test$strikes, pred)
+```
+
+
+
+```{r}
+dat <- list(
+  S = train$strikes,
+  T = train$tair)
+
+m5 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- a_alpha + b_alpha * T,
+    beta <- a_beta + b_beta *T,
+    a_alpha ~ dnorm(0,10),
+    b_alpha ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m5)
+print(summary_table <- precis(m5))
+
+plot( coeftab( m5 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- mean_a_alpha + mean_b_alpha * test$tair
+beta <- mean_a_beta + mean_b_beta * test$tair
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$tair, pred)
+plot(test$tair, test$strikes)
+plot(pred, test$strikes)
+
+rmse_tair <- RMSE(test$strikes, pred)
+```
+
+
+
+```{r}
+dat <- list(
+  S = train$strikes,
+  SP = train$sp)
+
+m6 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- a_alpha + b_alpha * SP,
+    beta <- a_beta + b_beta *SP,
+    a_alpha ~ dnorm(0,10),
+    b_alpha ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m6)
+print(summary_table <- precis(m6))
+
+plot( coeftab( m6 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- mean_a_alpha + mean_b_alpha * test$sp
+beta <- mean_a_beta + mean_b_beta * test$sp
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$sp, pred)
+plot(test$sp, test$strikes)
+plot(pred, test$strikes)
+
+rmse_sp <- RMSE(test$strikes, pred)
+```
+
+
+```{r}
+dat <- list(
+  S = train$strikes,
+  W = train$wind)
+
+m7 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- a_alpha + b_alpha * W,
+    beta <- a_beta + b_beta *W,
+    a_alpha ~ dnorm(0,10),
+    b_alpha ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m7)
+print(summary_table <- precis(m7))
+
+plot( coeftab( m7 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- mean_a_alpha + mean_b_alpha * test$wind
+beta <- mean_a_beta + mean_b_beta * test$wind
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$wind, pred)
+plot(test$wind, test$strikes)
+plot(pred, test$strikes)
+
+rmse_wind <- RMSE(test$strikes, pred)
+```
+
+
+```{r}
+dat <- list(
+  S = train$strikes,
+  P = train$precip)
+
+m8 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha <- a_alpha + b_alpha * P,
+    beta <- a_beta + b_beta *P,
+    a_alpha ~ dnorm(0,10),
+    b_alpha ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat , chains=2 , log_lik=TRUE )
+
+summary_table <- precis(m8)
+print(summary_table <- precis(m8))
+
+plot( coeftab( m8 ) , pars=c("a_alpha","b_alpha", "a_beta", "b_beta" ) )
+
+mean_a_alpha <- summary_table["a_alpha", "mean"]
+mean_b_alpha <- summary_table["b_alpha", "mean"]
+mean_a_beta <- summary_table["a_beta", "mean"]
+mean_b_beta <- summary_table["b_beta", "mean"]
+
+#predict
+alpha <- mean_a_alpha + mean_b_alpha * test$precip
+beta <- mean_a_beta + mean_b_beta * test$precip
+pred <- rbeta(nrow(test), alpha, beta)
+
+plot(test$precip, pred)
+plot(test$precip, test$strikes)
+plot(pred, test$strikes)
+
+rmse_precip <- RMSE(test$strikes, pred)
+```
+
+```{r}
+
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8)
+
+```
+
+```{r}
+rmse_table <- data.frame(var = c("CAPE", "CxP",  "ShortWaveRadiation", "RelativeHumidity", "Temperature", "Precipitation", "SurfacePressure", "Wind"),
+                          RMSE=c(rmse_cape, rmse_cxp, rmse_swr, rmse_rh, rmse_tair, rmse_precip, rmse_sp, rmse_wind))
+rmse_table
+ggplot() + geom_point(data=rmse_table, aes(x=RMSE, y=var))
+```

@@ -1,0 +1,175 @@
+---
+title: "Probability Distributions: Gamma"
+author: "Charlotte Uden"
+date: "2024-11-25"
+output: html_document
+---
+
+```{r}
+library(rethinking)
+library(dplyr)
+library(stats)
+library(caret)
+```
+
+```{r}
+data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummerSummaries_2005-2010_NEclip.csv")[,2:16]
+colnames(data) <- c("lat", "lon", "year", "strikes", "cape", "precip", "cxp", "d2m", "tair", "wind", "swr", "sp", "rh", "tmin", "tmax")
+hist(data$strikes, breaks = 30)
+```
+
+
+### Gamma
+
+```{r}
+#shape parameter k: skew/tail length
+#scale parameter beta: stretch/compress
+
+mu <- mean(data$strikes)
+sigma <- sd(data$strikes)
+
+k <- mu^2 / sigma^2
+beta <- mu / sigma^2
+
+simStrikes <- rgamma(length(data$strikes), k, beta)
+
+hist(simStrikes, breaks=30)
+
+```
+
+```{r}
+
+dat <- list(
+  S = data$strikes)
+
+m.2 <- ulam(
+  alist(
+    S ~ dgamma2( k , beta ),
+    k ~ dnorm(0,10),
+    beta ~ dnorm(0,10)
+  ), data=dat , chains = 4, cores = 4, log_lik=TRUE)
+
+
+summary_table <- precis(  m.2 )
+plot( coeftab( m.2 ) , pars=c("k","beta") )
+
+```
+
+
+```{r}
+
+mean_k <- summary_table["k", "mean"]
+mean_beta <- summary_table["beta", "mean"]
+
+simStrikes <- rgamma(length(data$strikes), mean_k, mean_beta)
+
+hist(simStrikes, breaks=30)
+
+```
+
+
+```{r}
+
+dat <- list(
+  S = data$strikes)
+
+m.3 <- ulam(
+  alist(
+    S ~ dgamma2( k , beta ),
+    k <- mu^2 / sigma^2,
+    beta <- mu / sigma^2,
+    mu ~ dnorm(0,5), 
+    sigma ~ dnorm(0,5)
+  ), data=dat , chains = 4, cores = 4, log_lik=TRUE)
+
+summary_table <- precis(  m.3 )
+plot( coeftab( m.3 ) , pars=c("mu","sigma") )
+
+mean_mu <- summary_table["mu", "mean"]
+mean_sigma <- summary_table["sigma", "mean"]
+
+k <- mean_mu^2 / mean_sigma^2
+beta <- mean_mu / mean_sigma^2
+
+simStrikes <- rgamma(length(data$strikes), k, beta)
+
+hist(simStrikes, breaks=30)
+```
+
+### Beta Distribution
+
+```{r}
+data <- data %>%
+  mutate(strikes_normalized = (strikes-min(strikes))/(max(strikes)-min(strikes))) 
+
+hist(data$strikes_normalized, breaks = 30)
+
+epsilon <- 1e-6  # Small value
+data$strikes_normalized <- pmin(pmax(data$strikes_normalized, epsilon), 1 - epsilon)
+
+```
+
+
+
+```{r}
+sigma <- sd(data$strikes_normalized)
+mu <- mean(data$strikes_normalized)
+alpha <- (mu^2 - mu^3 - mu*sigma^2) / (sigma^2)
+beta <- (mu - 2*mu^2 + mu^3 - sigma^2 + mu*sigma^2) / (sigma^2)
+
+simStrikes <- rbeta(length(data$strikes_normalized), alpha, beta)
+
+hist(simStrikes, breaks = 30)
+```
+
+
+
+```{r}
+
+dat <- list(
+  S = data$strikes_normalized)
+
+m.4 <- ulam(
+  alist(
+    S ~ dbeta( alpha , beta ),
+    alpha ~ dnorm(0,10),
+    beta ~ dnorm(0,10)
+  ), data=dat , chains=4 , cores = 4, log_lik=TRUE)
+
+precis( m.4 )
+plot( coeftab( m.4 ) , pars=c("alpha","beta") )
+
+
+```
+
+
+```{r}
+mean_alpha <- summary_table["alpha", "mean"]
+mean_beta <- summary_table["beta", "mean"]
+
+simStrikes <- rgamma(length(data$strikes_normalized), mean_alpha, mean_beta)
+
+hist(simStrikes, breaks=30)
+```
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+```{r}
+
+```

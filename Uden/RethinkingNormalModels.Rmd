@@ -1,0 +1,474 @@
+---
+title: "Probability Distributions: Normal"
+author: "Charlotte Uden"
+date: "2024-11-27"
+output: html_document
+---
+
+```{r}
+library(rethinking)
+library(dplyr)
+library(stats)
+library(caret)
+```
+
+```{r}
+data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummerSummaries_2005-2010_NEclip.csv")[,2:16]
+colnames(data) <- c("lat", "lon", "year", "strikes", "cape", "precip", "cxp", "d2m", "tair", "wind", "swr", "sp", "rh", "tmin", "tmax")
+hist(data$strikes, breaks = 30)
+```
+
+```{r}
+## 80% of the sample size
+sample_size <- floor(0.8 * nrow(data))
+
+## set the seed to make partition reproducible
+set.seed(123)
+train_index <- sample(seq_len(nrow(data)), size = sample_size)
+
+train <- data[train_index, ]
+test <- data[-train_index, ]
+
+```
+
+
+Standardize predictor variables 
+```{r}
+#save min and max (normalization parameters?):
+#-----
+mu_cxp <- mean(train$cxp)
+sigma_cxp <- sd(train$cxp)
+mu_cape <- mean(train$cape)
+sigma_cape <- sd(train$cape)
+mu_precip <- mean(train$precip)
+sigma_precip <- sd(train$precip)
+mu_tair <- mean(train$tair)
+sigma_tair <- sd(train$tair)
+mu_wind <- mean(train$wind)
+sigma_wind <- sd(train$wind)
+mu_swr <- mean(train$swr)
+sigma_swr <- sd(train$swr)
+mu_sp <- mean(train$sp)
+sigma_sp <- sd(train$sp)
+mu_rh <- mean(train$rh)
+sigma_rh <- sd(train$rh)
+#-----
+
+train <- train %>%
+  mutate(cape = (cape-mu_cape)/sigma_cape) %>%
+  mutate(precip = (precip-mu_precip)/sigma_precip) %>%
+  mutate(cxp = (cxp-mu_cxp)/sigma_cxp) %>%
+  mutate(tair = (tair-mu_tair)/sigma_tair) %>%
+  mutate(wind = (wind-mu_wind)/sigma_wind) %>%
+  mutate(swr = (swr-mu_swr)/sigma_swr) %>%
+  mutate(sp = (sp-mu_sp)/sigma_sp) %>%
+  mutate(rh = (rh-mu_rh)/sigma_rh) 
+
+train <- train[,c("strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+head(train)
+
+plot(train)
+
+#use the min and max values from the train set to normalize the test set 
+test <- test %>%
+  mutate(cape = (cape-mu_cape)/sigma_cape) %>%
+  mutate(precip = (precip-mu_precip)/sigma_precip) %>%
+  mutate(cxp = (cxp-mu_cxp)/sigma_cxp) %>%
+  mutate(tair = (tair-mu_tair)/sigma_tair) %>%
+  mutate(wind = (wind-mu_wind)/sigma_wind) %>%
+  mutate(swr = (swr-mu_swr)/sigma_swr) %>%
+  mutate(sp = (sp-mu_sp)/sigma_sp) %>%
+  mutate(rh = (rh-mu_rh)/sigma_rh) 
+
+test <- test[,c("strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+
+```
+
+```{r, echo=FALSE}
+
+dat <- list(
+  S = train$strikes)
+
+m0 <- ulam(
+  alist(
+    S ~ dnorm( mu , sigma ),
+    mu ~ dnorm(0,10),
+    sigma ~ dnorm(0,10)
+  ), data=dat , chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+
+
+```{r}
+rethinking::traceplot(m0)
+
+summary_table <- precis(  m0 )
+plot( coeftab( m0 ) , pars=c("mu","sigma") )
+
+
+#predictions 
+
+mean_mu <- summary_table["mu", "mean"]
+mean_sigma <- summary_table["sigma", "mean"]
+
+simStrikes <- rnorm(length(test$strikes), mean_mu, mean_sigma)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+```
+
+
+### Truncated normal - the normal distribution predicts negative lightning strike rates. I can:
+1. truncate the normal distribution so that no negative values are predicted - I dont know how to write  a model like this. and after reading a little, it seems that the gamma distrubution is a better choice for positive. see Rstan_models.Rmd for these models. 
+2. use a gamma distribution
+
+#Gamma Distribution
+```{r, echo=FALSE}
+
+dat <- list(
+  S = train$strikes)
+
+m1 <- ulam(
+  alist(
+    S ~ dgamma2( k , beta ),
+    k ~ dnorm(0,10),
+    beta ~ dnorm(0,10)
+  ), data=dat , chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+
+```{r}
+
+rethinking::traceplot(m1)
+summary_table <- precis(  m1 )
+plot( coeftab( m1 ) , pars=c("k","beta") )
+
+mean_k <- summary_table["k", "mean"]
+mean_beta <- summary_table["beta", "mean"]
+
+simStrikes <- rgamma(length(test$strikes), mean_k, mean_beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+hist(test$strikes, breaks=30, main = "observations")
+
+```
+
+```{r}
+compare(m0, m1)
+```
+
+
+```{r, echo=FALSE}
+
+dat <- list(
+  S = train$strikes)
+
+m2 <- ulam(
+  alist(
+    S ~ dgamma2( k , beta ),
+    k <- mu^2 / sigma^2,
+    beta <- mu / sigma^2,
+    mu ~ dnorm(0,5), 
+    sigma ~ dnorm(0,5)
+  ), data=dat , chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+
+```{r}
+
+rethinking::traceplot(m2)
+summary_table <- precis(  m2 )
+plot( coeftab( m2 ) , pars=c("mu","sigma") )
+
+mean_mu <- summary_table["mu", "mean"]
+mean_sigma <- summary_table["sigma", "mean"]
+
+k <- mean_mu^2 / mean_sigma^2
+beta <- mean_mu / mean_sigma^2
+
+simStrikes <- rgamma(length(data$strikes), k, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+hist(test$strikes, breaks=30, main = "observations")
+
+```
+
+```{r}
+compare(m0, m1, m2)
+```
+
+
+```{r}
+
+dat <- list(
+  S = train$strikes,
+  CAPE = train$cape)
+
+
+m3 <- ulam(alist(
+    S ~ dgamma2( k , beta ),
+    k <- a_k + b_k * CAPE,
+    beta <- a_beta + b_beta * CAPE,
+    a_k ~ dnorm(0,10),
+    b_k ~ dnorm(0,10),
+    a_beta ~ dnorm(0,10),
+    b_beta ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+```
+
+```{r}
+
+rethinking::traceplot(m3)
+summary_table <- precis(  m3 )
+plot( coeftab( m3 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$cape
+sigma <- a_sigma + b_sigma * test$cape
+
+simStrikes <- rnorm(length(test$cape), mu, sigma)
+
+hist(simStrikes, breaks=30)
+
+plot(test$cape, simStrikes, main = "predictions")
+plot(test$cape, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+
+
+```
+
+
+```{r}
+
+dat <- list(
+  S = train$strikes,
+  CXP = train$cxp)
+
+m4 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * CXP,
+    sigma <- a_sigma + b_sigma * CXP,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+rethinking::
+summary_table <- precis(  m4 )
+plot( coeftab( m4 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$cxp
+sigma <- a_sigma + b_sigma * test$cxp
+
+simStrikes <- rnorm(length(test$cxp), mu, sigma)
+
+hist(simStrikes, breaks=30)
+
+plot(test$cxp, simStrikes, main = "predictions")
+plot(test$cxp, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+
+```
+
+
+```{r}
+dat <- list(
+  S = train$strikes,
+  CXP = train$cxp)
+
+m6 <- ulam(alist(
+    log(S) ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * CXP,
+    sigma <- a_sigma + b_sigma * CXP,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+
+summary_table <- precis(  m6 )
+plot( coeftab( m6 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$cxp
+sigma <- a_sigma + b_sigma * test$cxp
+
+#simulate log(S) values
+simLogStrikes <- rnorm(length(test$cxp), mu, sigma)
+#transform:
+simStrikes <- exp(simLogStrikes)
+
+hist(simStrikes, breaks=30)
+
+plot(test$cxp, simStrikes, main = "predictions")
+plot(test$cxp, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+```
+
+#How do i make sure predictions are greater than 0?
+
+```{r}
+
+dat <- list(
+  S = train$strikes,
+  CXP = train$cxp)
+
+m7 <- ulam(alist(
+    S ~ dnorm( mu , sigma )  T[0, ], #truncate at 0
+    mu <- a_mu + b_mu * CXP,
+    sigma <- a_sigma + b_sigma * CXP,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+
+summary_table <- precis(  m7 )
+plot( coeftab( m7 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$cxp
+sigma <- a_sigma + b_sigma * test$cxp
+
+simStrikes <- rnorm(length(test$cxp), mu, sigma)
+
+hist(simStrikes, breaks=30)
+
+plot(test$cxp, simStrikes, main = "predictions")
+plot(test$cxp, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+
+
+```
+
+
+
+```{r}
+compare(m0, m1, m2, m3, m5, m6)
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+```{r}
+
+```

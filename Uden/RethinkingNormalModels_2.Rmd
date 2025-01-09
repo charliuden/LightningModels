@@ -1,0 +1,1253 @@
+---
+title: "Modeling Lightning Strike Rate"
+author: "Charlotte Uden"
+date: "2024-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This script uses the rethinking package to build Bayesian models of lighting strike rate from eight climate variables. Two of these variables are derived from information at various levels in the atmosphere:  CAPE (convective available potential energy) and CAPE x Precipitation. These variables have been used before to model lighting strike rate and provide a baseline for comparison with six surface level climate variables: short wave radiation, relative humidity, temperature, surface pressure, wind, and precipitation. The first model tested is a null model, where lighting strike rate is modeled from a normal distribution with no dependence on climate: 
+
+M0:
+Lightning Strike Rate ~ dnorm(mu, sigma)
+mu ~ dnorm(0, 10)
+sigma ~ dexp(1) 
+
+The following eight models (M1 - M8) allow mu and sigma to change with climate. Each climate variable is independently tested:
+
+M1 - M8:
+Lightning Strike Rate ~ dnorm(mu, sigma)
+mu <- a_mu + b_mu * climate_variable_x
+sigma <- a_sigma + b_sigma * climate_variable_x
+a_mu ~ dnorm(0, 10)
+b_mu ~ dnorm(0, 10)
+a_sigma ~ dexp(1) 
+b_sigma ~ dexp(1) 
+
+The compare() function is used to compare model performance, specifically WAIC scores. The final ten models (M9 - M17) use the performance of each of these single variable models to explore additive affects and interaction terms. 
+
+
+```{r, echo=FALSE, include=FALSE}
+library(rethinking)
+library(dplyr)
+library(stats)
+library(caret)
+```
+
+# Preprocessing
+
+1. Read in the data
+```{r, echo=FALSE}
+data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummerSummaries_2005-2010_NEclip.csv")[,2:16]
+colnames(data) <- c("lat", "lon", "year", "strikes", "cape", "precip", "cxp", "d2m", "tair", "wind", "swr", "sp", "rh", "tmin", "tmax")
+hist(data$strikes, breaks = 30)
+```
+
+2. split data into training and testing
+```{r, include=FALSE}
+## 80% of the sample size
+sample_size <- floor(0.8 * nrow(data))
+
+## set the seed to make partition reproducible
+set.seed(123)
+train_index <- sample(seq_len(nrow(data)), size = sample_size)
+
+train <- data[train_index, ]
+test <- data[-train_index, ]
+
+```
+
+
+3. Standardize predictor variables 
+```{r, echo=FALSE}
+#save min and max (normalization parameters?):
+#-----
+mu_cxp <- mean(train$cxp)
+sigma_cxp <- sd(train$cxp)
+mu_cape <- mean(train$cape)
+sigma_cape <- sd(train$cape)
+mu_precip <- mean(train$precip)
+sigma_precip <- sd(train$precip)
+mu_tair <- mean(train$tair)
+sigma_tair <- sd(train$tair)
+mu_wind <- mean(train$wind)
+sigma_wind <- sd(train$wind)
+mu_swr <- mean(train$swr)
+sigma_swr <- sd(train$swr)
+mu_sp <- mean(train$sp)
+sigma_sp <- sd(train$sp)
+mu_rh <- mean(train$rh)
+sigma_rh <- sd(train$rh)
+#-----
+
+train <- train %>%
+  mutate(cape = (cape-mu_cape)/sigma_cape) %>%
+  mutate(precip = (precip-mu_precip)/sigma_precip) %>%
+  mutate(cxp = (cxp-mu_cxp)/sigma_cxp) %>%
+  mutate(tair = (tair-mu_tair)/sigma_tair) %>%
+  mutate(wind = (wind-mu_wind)/sigma_wind) %>%
+  mutate(swr = (swr-mu_swr)/sigma_swr) %>%
+  mutate(sp = (sp-mu_sp)/sigma_sp) %>%
+  mutate(rh = (rh-mu_rh)/sigma_rh) 
+
+train <- train[,c("strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+head(train)
+
+plot(train)
+
+#use the min and max values from the train set to normalize the test set 
+test <- test %>%
+  mutate(cape = (cape-mu_cape)/sigma_cape) %>%
+  mutate(precip = (precip-mu_precip)/sigma_precip) %>%
+  mutate(cxp = (cxp-mu_cxp)/sigma_cxp) %>%
+  mutate(tair = (tair-mu_tair)/sigma_tair) %>%
+  mutate(wind = (wind-mu_wind)/sigma_wind) %>%
+  mutate(swr = (swr-mu_swr)/sigma_swr) %>%
+  mutate(sp = (sp-mu_sp)/sigma_sp) %>%
+  mutate(rh = (rh-mu_rh)/sigma_rh) 
+
+test <- test[,c("strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+
+```
+# M0: normal model, no dependance on climate
+
+First, model lightning strike rate using the normal distribution with no dependence on climate. Other models will be compared with this model. 
+
+    S ~ dnorm( mu , sigma ),
+    mu ~ dnorm(0,10),
+    sigma ~ dexp(0,10)
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes)
+
+m0 <- ulam(
+  alist(
+    S ~ dnorm( mu , sigma ),
+    mu ~ dnorm(0,10),
+    sigma ~ dnorm(0,10)
+  ), data=dat , chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+rethinking::traceplot(m0)
+
+summary_table <- precis(  m0 )
+plot( coeftab( m0 ) , pars=c("mu","sigma") )
+
+
+#predictions 
+
+mean_mu <- summary_table["mu", "mean"]
+mean_sigma <- summary_table["sigma", "mean"]
+
+simStrikes <- rnorm(length(test$strikes), mean_mu, mean_sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+rmse_m0 <- RMSE(simStrikes, test$strikes)
+
+```
+
+# M1: CAPE
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: CAPE
+    
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * CAPE,
+    sigma <- a_sigma + b_sigma * CAPE,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  CAPE = train$cape)
+
+m1 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * CAPE,
+    sigma <- a_sigma + b_sigma * CAPE,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m1)
+summary_table <- precis(  m1 )
+plot( coeftab( m1 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$cape
+sigma <- a_sigma + b_sigma * test$cape
+
+simStrikes <- rnorm(length(test$cape), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+plot(test$cxp, simStrikes, main = "predictions")
+plot(test$cxp, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+
+rmse_m1 <- RMSE(simStrikes, test$strikes)
+
+```
+# M2: CAPE x Precipitation
+
+Lighning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: CAPE x Precipitation
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * CXP,
+    sigma <- a_sigma + b_sigma * CXP,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  CXP = train$cxp)
+
+m2 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * CXP,
+    sigma <- a_sigma + b_sigma * CXP,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+#rethinking::traceplot(m2)
+summary_table <- precis(  m2 )
+plot( coeftab( m2 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$cxp
+sigma <- a_sigma + b_sigma * test$cxp
+
+simStrikes <- rnorm(length(test$cxp), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+plot(test$cxp, simStrikes, main = "predictions")
+plot(test$cxp, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m2 <- RMSE(simStrikes, test$strikes)
+
+```
+# M3: Relative Humidity
+
+Lighning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: Relative Humidity
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * RH,
+    sigma <- a_sigma + b_sigma * RH,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  RH = train$rh)
+
+m3 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * RH,
+    sigma <- a_sigma + b_sigma * RH,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m3)
+summary_table <- precis(  m3 )
+plot( coeftab( m3 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$rh
+sigma <- a_sigma + b_sigma * test$rh
+
+simStrikes <- rnorm(length(test$rh), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+plot(test$rh, simStrikes, main = "predictions")
+plot(test$rh, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m3 <- RMSE(simStrikes, test$strikes)
+```
+# M4: Short Wave Radiation
+
+Lighning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: Short wave radiation
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * SWR,
+    sigma <- a_sigma + b_sigma * SWR,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr)
+
+m4 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * SWR,
+    sigma <- a_sigma + b_sigma * SWR,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m4)
+summary_table <- precis(  m4 )
+plot( coeftab( m4 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr
+sigma <- a_sigma + b_sigma * test$swr
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+plot(test$swr, simStrikes, main = "predictions")
+plot(test$swr, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+
+rmse_m4 <- RMSE(simStrikes, test$strikes)
+```
+# M5: Temperature
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: Temperature
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * T,
+    sigma <- a_sigma + b_sigma * T,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  T = train$tair)
+
+m5 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * T,
+    sigma <- a_sigma + b_sigma * T,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m5)
+summary_table <- precis(  m5 )
+plot( coeftab( m5 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$tair
+sigma <- a_sigma + b_sigma * test$tair
+
+simStrikes <- rnorm(length(test$tair), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+plot(test$tair, simStrikes, main = "predictions")
+plot(test$tair, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m5 <- RMSE(simStrikes, test$strikes)
+```
+
+# M6: Surface Pressure
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: Surface Pressure
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * SP,
+    sigma <- a_sigma + b_sigma * SP,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SP = train$sp)
+
+m6 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * SP,
+    sigma <- a_sigma + b_sigma * SP,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m6)
+summary_table <- precis(  m6 )
+plot( coeftab( m6 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$sp
+sigma <- a_sigma + b_sigma * test$sp
+
+simStrikes <- rnorm(length(test$sp), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+plot(test$sp, simStrikes, main = "predictions")
+plot(test$sp, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m6 <- RMSE(simStrikes, test$strikes)
+```
+
+# M7: Precipitation
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: Precipitation
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * P,
+    sigma <- a_sigma + b_sigma * P,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  P = train$precip)
+
+m7 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * P,
+    sigma <- a_sigma + b_sigma * P,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m7)
+summary_table <- precis(  m7 )
+plot( coeftab( m7 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$precip
+sigma <- a_sigma + b_sigma * test$precip
+
+simStrikes <- rnorm(length(test$precip), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+plot(test$precip, simStrikes, main = "predictions")
+plot(test$precip, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m7 <- RMSE(simStrikes, test$strikes)
+```
+# M8: Wind
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: Wind
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * W,
+    sigma <- a_sigma + b_sigma * W,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  W = train$wind)
+
+m8 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * W,
+    sigma <- a_sigma + b_sigma * W,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m8)
+summary_table <- precis(  m8 )
+plot( coeftab( m8 ) , pars=c("a_mu","b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$wind
+sigma <- a_sigma + b_sigma * test$wind
+
+simStrikes <- rnorm(length(test$wind), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+plot(test$wind, simStrikes, main = "predictions")
+plot(test$wind, test$strikes, main = "observations" )
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m8 <- RMSE(simStrikes, test$strikes)
+```
+
+
+```{r, echo=FALSE}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8)
+```
+WAIC scores: best score is m1, CAPE. followed by shortwave radiation and temperature. (then CAPExPrecip, then relative humidity, wind, precip, surface pressure, and the null model). 
+# M9: Short Wave Radiation + Temperature
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: shortwave radiation and temperature, where swr and temp have addative affects. They contribute independently to the mean lightning strike rate and standard deviation. swr and temp do not intereact; ie. the effect of swr on lighting is teh same regardless of the temperature outside. 
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * SWR + c_mu * T,
+    sigma <- a_sigma + b_sigma * SWR + c_sigma * T,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair)
+
+m9 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * SWR + c_mu * T,
+    sigma <- a_sigma + b_sigma * SWR + c_sigma * T,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    c_mu ~ dnorm(0, 10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10),
+    c_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m9)
+summary_table <- precis(  m9 )
+plot( coeftab( m9 ) , pars=c("a_mu", "b_mu", "c_mu", "a_sigma", "b_sigma", "c_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+c_mu <- summary_table["c_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+c_sigma <- summary_table["c_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr + c_mu * test$tair
+sigma <- a_sigma + b_sigma * test$swr + c_sigma * test$tair
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr)) + geom_point(aes(x=SWR, y=predicted, color=T))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr)) + geom_point(aes(x=SWR, y=observed, color=T))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m9 <- RMSE(simStrikes, test$strikes)
+```
+
+
+```{r, echo=FALSE}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9)
+```
+# M10: Short Wave Radiation x Temperature
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependent on climate: shortwave radiation and temperature, which interact. The independent effects of short wave radiation and temperature are not accounted for in this model. 
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * SWR * T,
+    sigma <- a_sigma + b_sigma * SWR * T,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair)
+
+m10 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu * SWR * T,
+    sigma <- a_sigma + b_sigma * SWR * T,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    a_sigma ~ dnorm(0,10),
+    b_sigma ~ dnorm(0,10)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m10)
+summary_table <- precis(  m10 )
+plot( coeftab( m10 ) , pars=c("a_mu", "b_mu", "a_sigma", "b_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr * test$tair
+sigma <- a_sigma + b_sigma * test$swr * test$tair
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr)) + geom_point(aes(x=SWR, y=predicted, color=T))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr)) + geom_point(aes(x=SWR, y=observed, color=T))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m10 <- RMSE(simStrikes, test$strikes)
+```
+
+```{r, echo=FALSE}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10)
+```
+# M11: Short Wave Radiation + Temperature + (Short Wave Radiation x Temperature)
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: shortwave radiation and temperature, where swr and temp have addative affects and an interaction term. 
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*SWR*T,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*SWR*T,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair)
+
+m11 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*SWR*T,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*SWR*T,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    c_mu ~ dnorm(0, 10),
+    d_mu ~ dnorm(0, 10),
+    a_sigma ~ dexp(1),
+    b_sigma ~ dexp(1),
+    c_sigma ~ dexp(1),
+    d_sigma ~ dexp(1)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m11)
+summary_table <- precis(  m11 )
+plot( coeftab( m11 ) , pars=c("a_mu", "b_mu", "c_mu", "d_mu", "a_sigma", "b_sigma", "c_sigma", "d_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+c_mu <- summary_table["c_mu", "mean"]
+d_mu <- summary_table["d_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+c_sigma <- summary_table["c_sigma", "mean"]
+d_sigma <- summary_table["d_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr + c_mu * test$tair + d_mu * test$swr*test$tair
+sigma <- a_sigma + b_sigma * test$swr + c_sigma * test$tair + d_sigma * test$swr*test$tair
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr)) + geom_point(aes(x=SWR, y=predicted, color=T))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr)) + geom_point(aes(x=SWR, y=observed, color=T))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m11 <- RMSE(simStrikes, test$strikes)
+```
+
+Note that d_sigma is very close to 0, which make the interaction term between swr and tair also almost 0 - so interactions between tair and swr are minimal. This means that m11 is essentially the same as m9. Add, in fact, has a similar WAIC score as m9.  
+
+```{r, echo=FALSE}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11)
+```
+
+# M12: Short Wave Radiation + Temperature + Relative Humidity
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependant on climate: shortwave radiation, temperature, and relative humidity, where each predictor variable has an additive affect, but do not interact. Relative humidity has been added since it has the next best WAIC score when comparing simpler models that predict lighting from just one climate variable. 
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair, 
+  RH = train$rh)
+
+m12 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    c_mu ~ dnorm(0, 10),
+    d_mu ~ dnorm(0, 10),
+    a_sigma ~ dexp(1),
+    b_sigma ~ dexp(1),
+    c_sigma ~ dexp(1),
+    d_sigma ~ dexp(1)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m12)
+summary_table <- precis(  m12 )
+plot( coeftab( m12 ) , pars=c("a_mu", "b_mu", "c_mu", "d_mu", "a_sigma", "b_sigma", "c_sigma", "d_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+c_mu <- summary_table["c_mu", "mean"]
+d_mu <- summary_table["d_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+c_sigma <- summary_table["c_sigma", "mean"]
+d_sigma <- summary_table["d_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr + c_mu * test$tair + d_mu * test$rh
+sigma <- a_sigma + b_sigma * test$swr + c_sigma * test$tair + d_sigma * test$rh
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh)) + geom_point(aes(x=SWR, y=predicted, color=RH))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh)) + geom_point(aes(x=SWR, y=observed, color=RH))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m12 <- RMSE(simStrikes, test$strikes)
+```
+
+```{r, echo=FALSE}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12)
+```
+# M13: Short Wave Radiation + Temperature + Relative Humidity + Wind
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependent on climate: shortwave radiation, temperature, relative humidity, and wind, where each predictor variable has an additive affect, but do not interact. The wind model has the next best WAIC score.  
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + e_mu*W,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH +e_sigma*W,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair, 
+  RH = train$rh,
+  W = train$wind)
+
+m13 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + e_mu*W,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH +e_sigma*W,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    c_mu ~ dnorm(0, 10),
+    d_mu ~ dnorm(0, 10),
+    e_mu ~ dnorm(0, 10),
+    a_sigma ~ dexp(1),
+    b_sigma ~ dexp(1),
+    c_sigma ~ dexp(1),
+    d_sigma ~ dexp(1),
+    e_sigma ~ dexp(1)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m13)
+summary_table <- precis(  m13 )
+plot( coeftab( m13 ) , pars=c("a_mu", "b_mu", "c_mu", "d_mu", "e_mu", "a_sigma", "b_sigma", "c_sigma", "d_sigma", "e_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+c_mu <- summary_table["c_mu", "mean"]
+d_mu <- summary_table["d_mu", "mean"]
+e_mu <- summary_table["e_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+c_sigma <- summary_table["c_sigma", "mean"]
+d_sigma <- summary_table["d_sigma", "mean"]
+e_sigma <- summary_table["e_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr + c_mu * test$tair + d_mu * test$rh + e_mu * test$wind
+sigma <- a_sigma + b_sigma * test$swr + c_sigma * test$tair + d_sigma * test$rh + e_sigma * test$wind
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, W = test$wind)) + geom_point(aes(x=SWR, y=predicted, color=W))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, W = test$wind)) + geom_point(aes(x=SWR, y=observed, color=W))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m13 <- RMSE(simStrikes, test$strikes)
+```
+
+```{r, echo=FALSE}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13)
+```
+# M14: Short Wave Radiation + Temperature + Relative Humidity + Wind + Precipitation 
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependent on climate: shortwave radiation, temperature, relative humidity, wind, and precipitation, where each predictor variable has an additive affect, but do not interact. The precipitation model has the next best WAIC score.  
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + e_mu*W + f_mu*P,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + e_sigma*W + f_sigma*P,
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair, 
+  RH = train$rh,
+  W = train$wind,
+  P= train$precip)
+
+m14 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + e_mu*W + f_mu*P,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + e_sigma*W + f_sigma*P,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    c_mu ~ dnorm(0, 10),
+    d_mu ~ dnorm(0, 10),
+    e_mu ~ dnorm(0, 10),
+    f_mu ~ dnorm(0, 10),
+    a_sigma ~ dexp(1),
+    b_sigma ~ dexp(1),
+    c_sigma ~ dexp(1),
+    d_sigma ~ dexp(1),
+    e_sigma ~ dexp(1),
+    f_sigma ~ dexp(1)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m14)
+summary_table <- precis(  m14 )
+plot( coeftab( m14 ) , pars=c("a_mu", "b_mu", "c_mu", "d_mu", "e_mu", "f_mu", "a_sigma", "b_sigma", "c_sigma", "d_sigma", "e_sigma", "f_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+c_mu <- summary_table["c_mu", "mean"]
+d_mu <- summary_table["d_mu", "mean"]
+e_mu <- summary_table["e_mu", "mean"]
+f_mu <- summary_table["f_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+c_sigma <- summary_table["c_sigma", "mean"]
+d_sigma <- summary_table["d_sigma", "mean"]
+e_sigma <- summary_table["e_sigma", "mean"]
+f_sigma <- summary_table["f_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr + c_mu * test$tair + d_mu * test$rh + e_mu * test$wind + f_mu * test$precip
+sigma <- a_sigma + b_sigma * test$swr + c_sigma * test$tair + d_sigma * test$rh + e_sigma * test$wind + f_sigma * test$precip
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, W = test$wind, P = test$precip)) + geom_point(aes(x=SWR, y=predicted, color=P))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, W = test$wind, P = test$precip)) + geom_point(aes(x=SWR, y=observed, color=P))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m14 <- RMSE(simStrikes, test$strikes)
+```
+
+```{r, echo=FALSE}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14)
+```
+# M15: Short Wave Radiation + Temperature + Relative Humidity + Wind + Precipitation + Surface Pressure
+
+Lightning strike rate modeled from a normal distribution where mu and sigma are dependent on climate: shortwave radiation, temperature, relative humidity, wind, precipitation, and surface pressure, where each predictor variable has an additive affect, but do not interact. The surface pressure model has the next best WAIC score, but also the lowest after the null model, so it may not improve predictions by much. 
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + e_mu*W + f_mu*P + g_mu*SP,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + e_sigma*W + f_sigma*P + g_sigma*SP,
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair, 
+  RH = train$rh,
+  W = train$wind,
+  P= train$precip, 
+  SP = train$sp)
+
+m15 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + e_mu*W + f_mu*P + g_mu*SP,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + e_sigma*W + f_sigma*P + g_sigma*SP,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    c_mu ~ dnorm(0, 10),
+    d_mu ~ dnorm(0, 10),
+    e_mu ~ dnorm(0, 10),
+    f_mu ~ dnorm(0, 10),
+    g_mu ~ dnorm(0, 10),
+    a_sigma ~ dexp(1),
+    b_sigma ~ dexp(1),
+    c_sigma ~ dexp(1),
+    d_sigma ~ dexp(1),
+    e_sigma ~ dexp(1),
+    f_sigma ~ dexp(1),
+    g_sigma ~ dexp(1)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m15)
+summary_table <- precis(  m15 )
+plot( coeftab( m15 ) , pars=c("a_mu", "b_mu", "c_mu", "d_mu", "e_mu", "f_mu", "g_mu", "a_sigma", "b_sigma", "c_sigma", "d_sigma", "e_sigma", "f_sigma", "g_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+c_mu <- summary_table["c_mu", "mean"]
+d_mu <- summary_table["d_mu", "mean"]
+e_mu <- summary_table["e_mu", "mean"]
+f_mu <- summary_table["f_mu", "mean"]
+g_mu <- summary_table["g_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+c_sigma <- summary_table["c_sigma", "mean"]
+d_sigma <- summary_table["d_sigma", "mean"]
+e_sigma <- summary_table["e_sigma", "mean"]
+f_sigma <- summary_table["f_sigma", "mean"]
+g_sigma <- summary_table["g_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr + c_mu * test$tair + d_mu * test$rh + e_mu * test$wind + f_mu * test$precip + g_mu * test$sp
+sigma <- a_sigma + b_sigma * test$swr + c_sigma * test$tair + d_sigma * test$rh + e_sigma * test$wind + f_sigma * test$precip + g_sigma * test$sp
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, W = test$wind, P = test$precip, SP = test$sp)) + geom_point(aes(x=SWR, y=predicted, color=SP))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, W = test$wind, P = test$precip, SP = test$sp)) + geom_point(aes(x=SWR, y=observed, color=SP))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m15 <- RMSE(simStrikes, test$strikes)
+```
+
+```{r, echo=FALSE}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15)
+```
+# M16: Short Wave Radiation + Temperature + Relative Humidity + Precipitation + Surface Pressure
+
+Adding surface pressure to the model produces a lower WAIC score, and wind also reduces the WAIC score. The next two models remove wind, then surface pressure and wind. 
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + f_mu*P + g_mu*SP,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + f_sigma*P + g_sigma*SP,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair, 
+  RH = train$rh,
+  P= train$precip, 
+  SP = train$sp)
+
+m16 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + f_mu*P + g_mu*SP,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + f_sigma*P + g_sigma*SP,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    c_mu ~ dnorm(0, 10),
+    d_mu ~ dnorm(0, 10),
+    f_mu ~ dnorm(0, 10),
+    g_mu ~ dnorm(0, 10),
+    a_sigma ~ dexp(1),
+    b_sigma ~ dexp(1),
+    c_sigma ~ dexp(1),
+    d_sigma ~ dexp(1),
+    f_sigma ~ dexp(1),
+    g_sigma ~ dexp(1)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m16)
+summary_table <- precis(  m16 )
+plot( coeftab( m16 ) , pars=c("a_mu", "b_mu", "c_mu", "d_mu", "f_mu", "g_mu", "a_sigma", "b_sigma", "c_sigma", "d_sigma", "f_sigma", "g_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+c_mu <- summary_table["c_mu", "mean"]
+d_mu <- summary_table["d_mu", "mean"]
+f_mu <- summary_table["f_mu", "mean"]
+g_mu <- summary_table["g_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+c_sigma <- summary_table["c_sigma", "mean"]
+d_sigma <- summary_table["d_sigma", "mean"]
+f_sigma <- summary_table["f_sigma", "mean"]
+g_sigma <- summary_table["g_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr + c_mu * test$tair + d_mu * test$rh + f_mu * test$precip + g_mu * test$sp
+sigma <- a_sigma + b_sigma * test$swr + c_sigma * test$tair + d_sigma * test$rh + f_sigma * test$precip + g_sigma * test$sp
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, SP = test$sp)) + geom_point(aes(x=SWR, y=predicted, color=SP))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, SP = test$sp)) + geom_point(aes(x=SWR, y=observed, color=SP))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m16 <- RMSE(simStrikes, test$strikes)
+```
+# M17: Short Wave Radiation + Temperature + Relative Humidity + Precipitation 
+
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + f_mu*P,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + f_sigma*P,
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+dat <- list(
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair, 
+  RH = train$rh,
+  P= train$precip)
+
+m17 <- ulam(alist(
+    S ~ dnorm( mu , sigma ),
+    mu <- a_mu + b_mu*SWR + c_mu*T + d_mu*RH + f_mu*P,
+    sigma <- a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + f_sigma*P,
+    a_mu ~ dnorm(0,10),
+    b_mu ~ dnorm(0,10),
+    c_mu ~ dnorm(0, 10),
+    d_mu ~ dnorm(0, 10),
+    f_mu ~ dnorm(0, 10),
+    a_sigma ~ dexp(1),
+    b_sigma ~ dexp(1),
+    c_sigma ~ dexp(1),
+    d_sigma ~ dexp(1),
+    f_sigma ~ dexp(1)
+  ), data=dat, chains = 4, cores = 4, log_lik=TRUE)
+
+```
+
+```{r, echo=FALSE}
+#rethinking::traceplot(m17)
+summary_table <- precis(  m17 )
+plot( coeftab( m17 ) , pars=c("a_mu", "b_mu", "c_mu", "d_mu", "f_mu", "a_sigma", "b_sigma", "c_sigma", "d_sigma", "f_sigma") )
+
+#predictions 
+
+a_mu <- summary_table["a_mu", "mean"]
+b_mu <- summary_table["b_mu", "mean"]
+c_mu <- summary_table["c_mu", "mean"]
+d_mu <- summary_table["d_mu", "mean"]
+f_mu <- summary_table["f_mu", "mean"]
+a_sigma <- summary_table["a_sigma", "mean"]
+b_sigma <- summary_table["b_sigma", "mean"]
+c_sigma <- summary_table["c_sigma", "mean"]
+d_sigma <- summary_table["d_sigma", "mean"]
+f_sigma <- summary_table["f_sigma", "mean"]
+
+mu <- a_mu + b_mu * test$swr + c_mu * test$tair + d_mu * test$rh + f_mu * test$precip 
+sigma <- a_sigma + b_sigma * test$swr + c_sigma * test$tair + d_sigma * test$rh + f_sigma * test$precip
+
+simStrikes <- rnorm(length(test$swr), mu, sigma)
+simStrikes[simStrikes < 0] <- 0
+
+hist(simStrikes, breaks=30)
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip)) + geom_point(aes(x=SWR, y=predicted, color=P))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip)) + geom_point(aes(x=SWR, y=observed, color=P))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+rmse_m17 <- RMSE(simStrikes, test$strikes)
+```
+
+
+
+```{r}
+compare(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15, m16, m17)
+```
+M16 has the lowest WAIC score! This model excludes wind: 
+
+    S ~ dnorm( mu , sigma )
+    mu = a_mu + b_mu*SWR + c_mu*T + d_mu*RH + f_mu*P + g_mu*SP
+    sigma = a_sigma + b_sigma*SWR + c_sigma*T + d_sigma*RH + f_sigma*P + g_sigma*SP
+
+    
+Route Mean Square Error:
+```{r}
+rmse_table <- data.frame(cbind(
+  model = c("m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m15", "m16", "m17"),
+  RMSE = c(rmse_m0, rmse_m1, rmse_m2, rmse_m3, rmse_m4, rmse_m5, rmse_m6, rmse_m7, rmse_m8, rmse_m9, rmse_m10, rmse_m11, rmse_m12, rmse_m13, rmse_m14, rmse_m15, rmse_m16, rmse_m17)))
+
+rmse_table <- rmse_table %>%
+  arrange(RMSE)
+
+print(rmse_table)
+
+#write.csv(rmse_table, "/raid/cuden/LightningModels/Uden/rmse_rethinking_normal_models_negativesToZeros.csv")
+#write.csv(rmse_table, "/raid/cuden/LightningModels/Uden/rmse_rethinking_normal_models.csv")
+```

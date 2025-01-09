@@ -1,0 +1,471 @@
+---
+title: "Daily Lightning Predictions"
+author: "Charlotte Uden"
+date: "2024-11-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+```
+
+```{r}
+df <- read.csv("/raid/cuden/data/daily_test_set.csv")
+daily <- read.csv("/raid/cuden/data/daily_param_table.csv") # flahes/km2/day
+weekly <- read.csv("/raid/cuden/data/weekly_param_table.csv") # flahes/km2/day
+monthly <- read.csv("/raid/cuden/data/monthly_param_table.csv") # flashes/km2/month
+summer <- read.csv("/raid/cuden/data/summer_param_table.csv") # flashes/km2/month
+
+```
+
+
+```{r}
+params <- rbind(daily, weekly, monthly, summer)
+print(params)
+```
+```{r}
+correct_formula <- function(formula) {
+  # Count opening and closing parentheses
+  open_count <- stringr::str_count(formula, "\\(")
+  close_count <- stringr::str_count(formula, "\\)")
+  
+  # If too many closing parentheses, remove extras
+  if (close_count > open_count) {
+    formula <- gsub("\\)$", "", formula)
+  }
+  
+  # If too few closing parentheses, add missing ones
+  if (open_count > close_count) {
+    formula <- paste0(formula, paste0(rep(")", open_count - close_count), collapse = ""))
+  }
+  
+  return(formula)
+}
+
+# Apply the correction to the table
+params$beta <- sapply(params$beta, correct_formula)
+
+# View the corrected table
+print(params)
+
+```
+
+#function to predict strike rate from climate and parameters found in param table
+
+```{r}
+get_model_predict <- function(data, table, time_scale, column_name, var_name){
+  #data = df
+  #table = params
+  #time_scale = "daily"
+  #column_name = "rh"
+  #var_name = "RH" #this is the variable name used in the expression
+  
+  test_var <- data %>% select(all_of(column_name))
+  
+  #get function for mu
+  mu_function <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(mu)
+  
+  mu_expr <- mu_function$mu[1]
+  
+  #get mu function parameters from table
+  a_mu <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(a_mu)
+  a_mu_val <- a_mu$a_mu[1]
+  
+  b_mu <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(b_mu)
+  b_mu_val <- b_mu$b_mu[1]
+  
+  c_mu <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(c_mu)
+  c_mu_val <- c_mu$c_mu[1]
+  
+  d_mu <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(d_mu)
+  d_mu_val <- d_mu$d_mu[1]
+  
+  # Replace placeholders in the mu function string
+  mu_expr <- gsub("a_mu", as.character(a_mu_val), mu_expr)
+  mu_expr <- gsub("b_mu", as.character(b_mu_val), mu_expr)
+  mu_expr <- gsub("c_mu", as.character(c_mu_val), mu_expr)
+  mu_expr <- gsub("d_mu", as.character(d_mu_val), mu_expr)
+  
+  #replace the variable name in the expression with column name
+  mu_expr <- gsub(paste0(var_name), paste0("test_var[['", column_name, "']]"), mu_expr)
+  
+  #Evaluate the expression for the entire vector
+  mu <- eval(parse(text = mu_expr))
+  
+  #get function for beta
+  beta_function <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(beta)
+  
+  beta_expr <- beta_function$beta[1]
+  
+  #get beta function parambeters
+  a_beta <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(a_beta)
+  a_beta_val <- a_beta$a_beta[1]
+  
+  b_beta <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(b_beta)
+  b_beta_val <- b_beta$b_beta[1]
+  
+  c_beta <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(c_beta)
+  c_beta_val <- c_beta$c_beta[1]
+  
+  d_beta <- table %>%
+  filter(str_detect(scale, time_scale)) %>%
+  filter(str_detect(climate_var, column_name)) %>%
+    select(d_beta)
+  d_beta_val <- d_beta$d_beta[1]
+  
+   # Replace placeholders in the beta function string
+  beta_expr <- gsub("a_beta", as.character(a_beta_val), beta_expr)
+  beta_expr <- gsub("b_beta", as.character(b_beta_val), beta_expr)
+  beta_expr <- gsub("c_beta", as.character(c_beta_val), beta_expr)
+  beta_expr <- gsub("d_beta", as.character(d_beta_val), beta_expr)
+  
+  #replace the variable name in the expression with column name
+  beta_expr <- gsub(paste0(var_name), paste0("test_var[['", column_name, "']]"), beta_expr)
+  
+  #Evaluate the expression for the entire vector
+  beta <- eval(parse(text = beta_expr))
+  
+  #sample from beta distribution
+  #alpha = ((𝜇*𝛽)/(1-𝜇))
+  alpha = ((mu*beta)/(1-mu))
+  pred <- rbeta(nrow(test_var), alpha, beta)
+  
+  return(pred)
+}
+
+```
+
+
+
+Daily Cape Model
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="daily", column_name="cape", var_name="CAPE")
+plot(df$cape, pred, main="Predicted Strikes")
+plot(df$cape, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_cape <- rmse(df$strike_rate_daily, pred)
+```
+
+Daily CAPE x Precip model
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="daily", column_name="cxp", var_name="CXP")
+plot(df$cxp, pred, main="Predicted Strikes")
+plot(df$cxp, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_cxp <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="daily", column_name="rh", var_name="RH")
+plot(df$rh, pred, main="Predicted Strikes")
+plot(df$rh, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_rh <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="daily", column_name="swr", var_name="SWR")
+plot(df$swr, pred, main="Predicted Strikes")
+plot(df$swr, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_swr <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="daily", column_name="tair", var_name="T")
+plot(df$tair, pred, main="Predicted Strikes")
+plot(df$tair, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_tair <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="daily", column_name="precip", var_name="P")
+plot(df$precip, pred, main="Predicted Strikes")
+plot(df$precip, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_precip <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="daily", column_name="sp", var_name="SP")
+plot(df$sp, pred, main="Predicted Strikes")
+plot(df$sp, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_sp <- rmse(df$strike_rate_daily, pred)
+```
+
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="daily", column_name="wind", var_name="W")
+plot(df$wind, pred, main="Predicted Strikes")
+plot(df$wind, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_wind <- rmse(df$strike_rate_daily, pred)
+```
+```{r}
+rmse_table <- data.frame(var = c("CAPE", "CxP", "RelativeHumidity", "ShortWaveRadiation", "Temperature", "Precipitation", "SurfacePressure", "Wind"),
+                          RMSE=c(rmse_daily_cape, rmse_daily_cxp, rmse_daily_rh, rmse_daily_swr, rmse_daily_tair, rmse_daily_precip, rmse_daily_sp, rmse_daily_wind),
+                         scale= rep("daily", 8))
+rmse_table
+ggplot() + geom_point(data=rmse_table, aes(y=var, x=RMSE))
+```
+
+```{r}
+ggplot() + geom_point(data=rmse_table, aes(y=var, x=RMSE))
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="weekly", column_name="cape", var_name="CAPE")
+plot(df$cape, pred, main="Predicted Strikes")
+plot(df$cape, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_cape <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="weekly", column_name="cxp", var_name="CXP")
+plot(df$cxp, pred, main="Predicted Strikes")
+plot(df$cxp, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_cxp <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="weekly", column_name="rh", var_name="RH")
+plot(df$rh, pred, main="Predicted Strikes")
+plot(df$rh, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_rh <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="weekly", column_name="swr", var_name="SWR")
+plot(df$swr, pred, main="Predicted Strikes")
+plot(df$swr, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_swr <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="weekly", column_name="tair", var_name="T")
+plot(df$tair, pred, main="Predicted Strikes")
+plot(df$tair, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_tair <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="weekly", column_name="precip", var_name="P")
+plot(df$precip, pred, main="Predicted Strikes")
+plot(df$precip, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_precip <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="weekly", column_name="sp", var_name="SP")
+plot(df$sp, pred, main="Predicted Strikes")
+plot(df$sp, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_sp <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="weekly", column_name="wind", var_name="W")
+plot(df$wind, pred, main="Predicted Strikes")
+plot(df$wind, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_wind <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+rmse_table <- rbind(rmse_table, data.frame(var = c("CAPE", "CxP", "RelativeHumidity", "ShortWaveRadiation", "Temperature", "Precipitation", "SurfacePressure", "Wind"),
+                          RMSE=c(rmse_daily_cape, rmse_daily_cxp, rmse_daily_rh, rmse_daily_swr, rmse_daily_tair, rmse_daily_precip, rmse_daily_sp, rmse_daily_wind),
+                         scale= rep("weekly", 8)))
+rmse_table
+ggplot() + geom_point(data=rmse_table, aes(y=var, x=RMSE, col=scale))
+```
+
+
+#Monthly models
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="monthly", column_name="cape", var_name="CAPE")
+plot(df$cape, pred, main="Predicted Strikes")
+plot(df$cape, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_cape <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="monthly", column_name="cxp", var_name="CXP")
+plot(df$cxp, pred, main="Predicted Strikes")
+plot(df$cxp, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_cxp <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="monthly", column_name="rh", var_name="RH")
+plot(df$rh, pred, main="Predicted Strikes")
+plot(df$rh, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_rh <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="monthly", column_name="swr", var_name="SWR")
+plot(df$swr, pred, main="Predicted Strikes")
+plot(df$swr, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_swr <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="monthly", column_name="tair", var_name="T")
+plot(df$tair, pred, main="Predicted Strikes")
+plot(df$tair, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_tair <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="monthly", column_name="precip", var_name="P")
+plot(df$precip, pred, main="Predicted Strikes")
+plot(df$precip, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_precip <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="monthly", column_name="sp", var_name="SP")
+plot(df$sp, pred, main="Predicted Strikes")
+plot(df$sp, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_sp <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="monthly", column_name="wind", var_name="W")
+plot(df$wind, pred, main="Predicted Strikes")
+plot(df$wind, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_wind <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+rmse_table <- rbind(rmse_table, data.frame(var = c("CAPE", "CxP", "RelativeHumidity", "ShortWaveRadiation", "Temperature", "Precipitation", "SurfacePressure", "Wind"),
+                          RMSE=c(rmse_daily_cape, rmse_daily_cxp, rmse_daily_rh, rmse_daily_swr, rmse_daily_tair, rmse_daily_precip, rmse_daily_sp, rmse_daily_wind),
+                         scale= rep("monthly", 8)))
+rmse_table
+ggplot() + geom_point(data=rmse_table, aes(y=var, x=RMSE))
+```
+
+
+
+
+#Summer (seasonal) models
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="summer", column_name="cape", var_name="CAPE")
+plot(df$cape, pred, main="Predicted Strikes")
+plot(df$cape, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_cape <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="summer", column_name="cxp", var_name="CXP")
+plot(df$cxp, pred, main="Predicted Strikes")
+plot(df$cxp, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_cxp <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="summer", column_name="rh", var_name="RH")
+plot(df$rh, pred, main="Predicted Strikes")
+plot(df$rh, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_rh <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="summer", column_name="swr", var_name="SWR")
+plot(df$swr, pred, main="Predicted Strikes")
+plot(df$swr, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_swr <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="summer", column_name="tair", var_name="T")
+plot(df$tair, pred, main="Predicted Strikes")
+plot(df$tair, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_tair <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="summer", column_name="precip", var_name="P")
+plot(df$precip, pred, main="Predicted Strikes")
+plot(df$precip, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_precip <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="summer", column_name="sp", var_name="SP")
+plot(df$sp, pred, main="Predicted Strikes")
+plot(df$sp, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_sp <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+pred <- get_model_predict(data=df, table=params, time_scale="summer", column_name="wind", var_name="W")
+plot(df$wind, pred, main="Predicted Strikes")
+plot(df$wind, df$strike_rate_daily, main = "Observed Strikes")
+plot(df$strike_rate_daily, pred)
+rmse_daily_wind <- rmse(df$strike_rate_daily, pred)
+```
+
+```{r}
+rmse_table <- rbind(rmse_table, data.frame(var = c("CAPE", "CxP", "RelativeHumidity", "ShortWaveRadiation", "Temperature", "Precipitation", "SurfacePressure", "Wind"),
+                          RMSE=c(rmse_daily_cape, rmse_daily_cxp, rmse_daily_rh, rmse_daily_swr, rmse_daily_tair, rmse_daily_precip, rmse_daily_sp, rmse_daily_wind),
+                         scale= rep("summer", 8)))
+rmse_table
+ggplot() + geom_point(data=rmse_table, aes(y=var, x=RMSE))
+```
