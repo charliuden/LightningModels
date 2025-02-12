@@ -22,15 +22,15 @@ df$day <- as.numeric(format(df$date,'%d'))
 
 str(df)
 
-ggplot(data=df, aes(x=date, y=strikes, alpha=0.1)) +
-  geom_pointdensity(adjust = .05, alpha=0.5) +
-  scale_color_viridis() + 
-  xlab("Year") +
-  ylab(expression(Cloud~to~ground~lightning~count)) + 
-  guides(alpha="none", color="none") + 
-  theme_minimal() +
-  scale_x_date(date_breaks="month", date_labels="%b-%Y") +
-  theme(axis.text.x=element_text(angle=60, hjust=1)) 
+# ggplot(data=df, aes(x=date, y=strikes, alpha=0.1)) +
+#   geom_pointdensity(adjust = .05, alpha=0.5) +
+#   scale_color_viridis() + 
+#   xlab("Year") +
+#   ylab(expression(Cloud~to~ground~lightning~count)) + 
+#   guides(alpha="none", color="none") + 
+#   theme_minimal() +
+#   scale_x_date(date_breaks="month", date_labels="%b-%Y") +
+#   theme(axis.text.x=element_text(angle=60, hjust=1)) 
 
 #calculate mean strike rate for each month and day (so, average across years and lat lon)
 cols <- c("month", "day")
@@ -48,15 +48,34 @@ summary_strikes <- summary_strikes %>%
   )
 
 # Plot using ggplot
-ggplot(summary_strikes, aes(x = day_of_year, y = strikes)) +
+p1 <- ggplot(summary_strikes, aes(x = day_of_year, y = strikes)) +
   #geom_line() +  # Line plot
-  geom_point() +  # Optional: Add points
+  geom_point(shape = 21, fill = NA, color = "black", size = 0.5, stroke = 0.5) +  # Optional: Add points
   scale_x_continuous(
     breaks = cumsum(c(0, days_in_month(1:12)))[-13],  # Approximate month start days
     labels = month.abb  # Label x-axis with month abbreviations
   ) +
-  labs(x = "Month", y = "Average daily lightning strike count") +
-  theme_minimal()
+  labs(x = "", y = "Average daily lightning strike count") +
+  theme_minimal() +
+  ggtitle("(a)") +
+  theme(
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8, angle = 45, ),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    legend.title.align = 0,
+    legend.position = "bottom", 
+    legend.justification = "left",
+    legend.direction = "horizontal"
+  )
+
+p1
 
 
 ggplot(data=df, aes(x=as.factor(month), y=strikes)) +
@@ -67,16 +86,27 @@ ggplot(data=df, aes(x=as.factor(month), y=strikes)) +
   theme_minimal() 
 
 #normalize the data
+# df <- df %>%
+#   mutate(strikes = (strikes-min(strikes))/(max(strikes)-min(strikes))) %>% #normalized 
+#   mutate(cape = (cape-min(cape))/(max(cape)-min(cape))) %>%
+#   mutate(precip = (mtpr-min(mtpr))/(max(mtpr)-min(mtpr))) %>%
+#   mutate(cxp = (cxp-min(cxp))/(max(cxp)-min(cxp))) %>%
+#   mutate(tair = (d2m-min(d2m))/(max(d2m)-min(d2m))) %>%
+#   mutate(wind = (i10fg-min(i10fg))/(max(i10fg)-min(i10fg))) %>%
+#   mutate(swr = (msdwswrf-min(msdwswrf))/(max(msdwswrf)-min(msdwswrf))) %>%
+#   mutate(sp = (sp-min(sp))/(max(sp)-min(sp))) %>%
+#   mutate(rh = (rh-min(rh))/(max(rh)-min(rh))) 
+
+#standardize the data
 df <- df %>%
-  mutate(strikes = (strikes-min(strikes))/(max(strikes)-min(strikes))) %>% #normalized 
-  mutate(cape = (cape-min(cape))/(max(cape)-min(cape))) %>%
-  mutate(precip = (mtpr-min(mtpr))/(max(mtpr)-min(mtpr))) %>%
-  mutate(cxp = (cxp-min(cxp))/(max(cxp)-min(cxp))) %>%
-  mutate(tair = (d2m-min(d2m))/(max(d2m)-min(d2m))) %>%
-  mutate(wind = (i10fg-min(i10fg))/(max(i10fg)-min(i10fg))) %>%
-  mutate(swr = (msdwswrf-min(msdwswrf))/(max(msdwswrf)-min(msdwswrf))) %>%
-  mutate(sp = (sp-min(sp))/(max(sp)-min(sp))) %>%
-  mutate(rh = (rh-min(rh))/(max(rh)-min(rh))) 
+  mutate(cape = ((cape-mean(cape))/sd(cape))) %>%
+  mutate(precip = ((mtpr-mean(mtpr))/sd(mtpr))) %>%
+  mutate(cxp = ((cxp-mean(cxp))/sd(cxp))) %>%
+  mutate(tair = ((t2m-mean(t2m))/sd(t2m))) %>%
+  mutate(wind = ((i10fg-mean(i10fg))/sd(i10fg))) %>%
+  mutate(swr = ((msdwswrf-mean(msdwswrf))/sd(msdwswrf))) %>%
+  mutate(sp = ((sp-mean(sp))/sd(sp))) %>%
+  mutate(rh = ((rh-mean(rh))/sd(rh)))
 
 ggplot() + geom_point(data=df, aes(x=date, y=strikes, alpha=0.1)) +
   geom_pointdensity() +
@@ -103,21 +133,26 @@ p2
 
 #Figure 2: map of the region
 
+# get new england and new york polygons from mapdata library :
+library(mapdata)
+states <- map_data("state")#turn state line map into data frame
+northeast <- subset(states, region %in% c("vermont", "new hampshire", "connecticut", "maine", "rhode island", "massachusetts", "new york"))#subest northeastern states
+map <- geom_polygon(data = northeast, aes(x=long, y = lat, group = group), fill = NA, color = "grey") 
+
+
 #monthly averages, no lat lon or date
 data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummaries_2005-2010_NEclip.csv")[,2:16]
 
-#Normalize the data
+#standardize the data
 data <- data %>%
-  mutate(strikes = (mean_strike_rate-min(mean_strike_rate))/(max(mean_strike_rate)-min(mean_strike_rate))) %>% #normalized 
-  mutate(cape = (cape_monthly_mean-min(cape_monthly_mean))/(max(cape_monthly_mean)-min(cape_monthly_mean))) %>%
-  mutate(precip = (mtpr_monthly_mean-min(mtpr_monthly_mean))/(max(mtpr_monthly_mean)-min(mtpr_monthly_mean))) %>%
-  mutate(cxp = (cxp_monthly_mean-min(cxp_monthly_mean))/(max(cxp_monthly_mean)-min(cxp_monthly_mean))) %>%
-  mutate(tair = (d2m_monthly_mean-min(d2m_monthly_mean))/(max(d2m_monthly_mean)-min(d2m_monthly_mean))) %>%
-  mutate(wind = (i10fg_monthly_mean-min(i10fg_monthly_mean))/(max(i10fg_monthly_mean)-min(i10fg_monthly_mean))) %>%
-  mutate(swr = (msdwswrf_monthly_mean-min(msdwswrf_monthly_mean))/(max(msdwswrf_monthly_mean)-min(msdwswrf_monthly_mean))) %>%
-  mutate(sp = (sp_monthly_mean-min(sp_monthly_mean))/(max(sp_monthly_mean)-min(sp_monthly_mean))) %>%
-  mutate(rh = (rh_monthly_mean-min(rh_monthly_mean))/(max(rh_monthly_mean)-min(rh_monthly_mean))) 
-
+  mutate(cape = ((cape-mean(cape))/sd(cape))) %>%
+  mutate(precip = ((precip-mean(precip))/sd(precip))) %>%
+  mutate(cxp = ((cxp-mean(cxp))/sd(cxp))) %>%
+  mutate(tair = ((tair-mean(tair))/sd(tair))) %>%
+  mutate(wind = ((wind-mean(wind))/sd(wind))) %>%
+  mutate(swr = ((swr-mean(swr))/sd(swr))) %>%
+  mutate(sp = ((sp-mean(sp))/sd(sp))) %>%
+  mutate(rh = ((rh-mean(rh))/sd(rh)))
 #calculate mean values across years
 cols <- c("lon", "lat")
 
@@ -126,23 +161,85 @@ summary_strike <- data %>%
   group_by(across(all_of(cols))) %>% 
   summarize(strikes = mean(strikes), .groups = 'drop')
 
+#get map of the NE
+library(mapdata)
+# get new england and new york polygons from mapdata library :
+states <- map_data("state")#turn state line map into data frame
+northeast <- subset(states, region %in% c("vermont", "new hampshire", "connecticut", "maine", "rhode island", "massachusetts", "new york"))#subest northeastern states
+
+# plot state polygons and PalEON grid, just to see what we are working with:
+map <- geom_polygon(data = northeast, aes(x=long, y = lat, group = group), fill = NA, color = "black", size=0.2) 
+
 library(terra)
 r <- rast(summary_strike[,c("lon", "lat", "strikes")])
 plot(r)
 crs(r) <- "+init=epsg:4326"
 
-p_lightning <- ggplot() + geom_raster(data=summary_strike, aes(x=lon, y=lat, fill=strikes)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(Flashes/km^2/month))) + 
-  theme_minimal()  + 
+p_lightning <- ggplot() + 
+  geom_raster(data = summary_strike, aes(x = lon, y = lat, fill = strikes)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(Lightning~Flash~Rate))) + 
+  theme_minimal() +
   theme(
-    legend.text = element_text(size=12),
+      plot.title = element_text(size = 10),
+      axis.title.x = element_text(size = 8),
+      axis.title.y = element_text(size = 8),
+      axis.text.y = element_text(size = 8),
+      axis.text.x = element_text(size = 8),
+      panel.grid.major = element_line(color = "black", size = 0.05), 
+      panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
     legend.title.align = 0,
     legend.position = "bottom", 
     legend.justification = "left",
-    legend.direction = "horizontal")
+    legend.direction = "horizontal"
+  ) + ggtitle("(b)") + map +
+  xlab("Lat") + ylab("Lon")
 
 p_lightning
+
+
+#CAPE
+summary_cape <- data %>% 
+  group_by(across(all_of(cols))) %>% 
+  summarize(cape = mean(cape), .groups = 'drop')
+
+r <- rast(summary_cape[,c("lon", "lat", "cape")])
+plot(r)
+crs(r) <- "+init=epsg:4326"
+
+p_cape <- ggplot() + 
+  geom_raster(data = summary_cape, aes(x = lon, y = lat, fill = cape)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(CAPE))) + 
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    legend.title.align = 0,
+    legend.position = "bottom", 
+    legend.justification = "left",
+    legend.direction = "horizontal"
+  ) + ggtitle("(c)") + map+
+  xlab("Lat") + ylab("Lon")
+
+p_cape
 
 #CAPE x Precipitation
 summary_cxp <- data %>% 
@@ -153,17 +250,31 @@ r <- rast(summary_cxp[,c("lon", "lat", "cxp")])
 plot(r)
 crs(r) <- "+init=epsg:4326"
 
-p_cxp <- ggplot() + geom_raster(data=summary_cxp, aes(x=lon, y=lat, fill=cxp)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(CAPE~x~Precip~(W~m^-2)))) + 
-  theme_minimal()  + 
+p_cxp <- ggplot() + 
+  geom_raster(data = summary_cxp, aes(x = lon, y = lat, fill = cxp)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(CAPE~x~Precip))) + 
+  theme_minimal() +
   theme(
-    legend.text = element_text(size=12),
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
     legend.title.align = 0,
     legend.position = "bottom", 
     legend.justification = "left",
-    legend.direction = "horizontal")
-
+    legend.direction = "horizontal"
+  ) + ggtitle("(d)") + map+
+  xlab("Lat") + ylab("Lon")
 p_cxp
 
 #Temperature
@@ -171,33 +282,68 @@ summary_temp <- data %>%
   group_by(across(all_of(cols))) %>% 
   summarize(tair = mean(tair), .groups = 'drop')
 
-p_temp <- ggplot() + geom_raster(data=summary_temp, aes(x=lon, y=lat, fill=tair)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(Temperature (Celcius)))) + 
-  theme_minimal()  + 
+p_temp <- ggplot() + 
+  geom_raster(data=summary_temp, aes(x=lon, y=lat, fill=tair)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(Temperature))) + 
+  theme_minimal() +
   theme(
-    legend.text = element_text(size=12),
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
     legend.title.align = 0,
     legend.position = "bottom", 
     legend.justification = "left",
-    legend.direction = "horizontal")
+    legend.direction = "horizontal"
+  ) + 
+  ggtitle("(e)") + map+
+  xlab("Lat") + ylab("Lon")
+
 p_temp
+
 
 #Wind
 summary_wind <- data %>% 
   group_by(across(all_of(cols))) %>% 
   summarize(wind = mean(wind), .groups = 'drop')
 
-p_wind <- ggplot() + geom_raster(data=summary_wind, aes(x=lon, y=lat, fill=wind)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(Wind~(m/s)))) + 
-  theme_minimal()  + 
+p_wind <- ggplot() + 
+  geom_raster(data=summary_wind, aes(x=lon, y=lat, fill=wind)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(Wind~speed))) + 
+  theme_minimal() +
   theme(
-    legend.text = element_text(size=12),
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
     legend.title.align = 0,
     legend.position = "bottom", 
     legend.justification = "left",
-    legend.direction = "horizontal")
+    legend.direction = "horizontal"
+  ) +
+  ggtitle("(f)") + map+
+  xlab("Lat") + ylab("Lon")
+
 p_wind
 
 #Short-wave radiation
@@ -205,16 +351,33 @@ summary_radiation <- data %>%
   group_by(across(all_of(cols))) %>% 
   summarize(swr = mean(swr), .groups = 'drop')
 
-p_radiation <- ggplot() + geom_raster(data=summary_radiation, aes(x=lon, y=lat, fill=swr)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(Short-wave~radiation~(W/m^2)))) + 
-  theme_minimal()  + 
+p_radiation <- ggplot() + 
+  geom_raster(data=summary_radiation, aes(x=lon, y=lat, fill=swr)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(Short~wave~radiation))) + 
+  theme_minimal() +
   theme(
-    legend.text = element_text(size=12),
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
     legend.title.align = 0,
     legend.position = "bottom", 
     legend.justification = "left",
-    legend.direction = "horizontal")
+    legend.direction = "horizontal"
+  ) +
+  ggtitle("(g)") + map+
+  xlab("Lat") + ylab("Lon")
+
 p_radiation
 
 #Surface Pressure
@@ -222,16 +385,33 @@ summary_sp <- data %>%
   group_by(across(all_of(cols))) %>% 
   summarize(sp = mean(sp), .groups = 'drop')
 
-p_sp <- ggplot() + geom_raster(data=summary_sp, aes(x=lon, y=lat, fill=sp)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(Surface~pressure~(Pa)))) + 
-  theme_minimal()  + 
+p_sp <- ggplot() + 
+  geom_raster(data=summary_sp, aes(x=lon, y=lat, fill=sp)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(Surface~pressure))) + 
+  theme_minimal() +
   theme(
-    legend.text = element_text(size=12),
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
     legend.title.align = 0,
     legend.position = "bottom", 
     legend.justification = "left",
-    legend.direction = "horizontal")
+    legend.direction = "horizontal"
+  ) +
+  ggtitle("(h)") + map+
+  xlab("Lat") + ylab("Lon")
+
 p_sp
 
 #Relative humidity
@@ -239,16 +419,33 @@ summary_rh <- data %>%
   group_by(across(all_of(cols))) %>% 
   summarize(rh = mean(rh), .groups = 'drop')
 
-p_rh <- ggplot() + geom_raster(data=summary_rh, aes(x=lon, y=lat, fill=rh)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(Relative~humidity~(percent)))) + 
-  theme_minimal()  + 
+p_rh <- ggplot() + 
+  geom_raster(data=summary_rh, aes(x=lon, y=lat, fill=rh)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(Relative~humidity))) + 
+  theme_minimal() +
   theme(
-    legend.text = element_text(size=12),
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
     legend.title.align = 0,
     legend.position = "bottom", 
     legend.justification = "left",
-    legend.direction = "horizontal")
+    legend.direction = "horizontal"
+  ) + 
+  ggtitle("(i)") + map+
+  xlab("Lat") + ylab("Lon")
+
 p_rh
 
 #Precipitation
@@ -256,38 +453,41 @@ summary_precip <- data %>%
   group_by(across(all_of(cols))) %>% 
   summarize(precip = mean(precip), .groups = 'drop')
 
-p_precip <- ggplot() + geom_raster(data=summary_precip, aes(x=lon, y=lat, fill=precip)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(Precipitation~(kg/m^2/s)))) + 
-  theme_minimal()  + 
+p_precip <- ggplot() + 
+  geom_raster(data=summary_precip, aes(x=lon, y=lat, fill=precip)) + 
+  scale_fill_gradientn(
+    colors = c("red", "orange", "yellow", "green", "blue"),  # Custom color palette
+    name = expression(Flashes / km^2 / month)  # Legend title with expression
+  ) +
+  guides(fill = guide_legend(title = expression(Precipitation))) + 
+  theme_minimal() +
   theme(
-    legend.text = element_text(size=12),
+    plot.title = element_text(size = 10),
+    axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01),
+    legend.key.size = unit(0.4, 'cm'),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
     legend.title.align = 0,
     legend.position = "bottom", 
     legend.justification = "left",
-    legend.direction = "horizontal")
+    legend.direction = "horizontal"
+  ) +
+  ggtitle("") +
+  ggtitle("(j)") + map+
+  xlab("Lat") + ylab("Lon")
+
 p_precip
 
-#CAPE
-summary_cape <- data %>% 
-  group_by(across(all_of(cols))) %>% 
-  summarize(cape = mean(cape), .groups = 'drop')
 
-p_cape <- ggplot() + geom_raster(data=summary_cape, aes(x=lon, y=lat, fill=cape)) + 
-  scale_fill_gradient(low="lightyellow",high="orange") +
-  guides(fill=guide_legend(title=expression(CAPE~(J/kg)))) + 
-  theme_minimal()  + 
-  theme(
-    legend.text = element_text(size=12),
-    legend.title.align = 0,
-    legend.position = "bottom", 
-    legend.justification = "left",
-    legend.direction = "horizontal")
-p_cape
 
 #library(gridExtra)
-grid.arrange(p_lightning, p_cape, p_precip, p_temp, p_wind, p_sp, p_rh, p_radiation, 
-             ncol=4, nrow=2)
+grid.arrange(p1, p_lightning, p_cape, p_cxp, p_temp, p_wind, p_radiation, p_sp, p_rh, p_precip,
+             ncol=5, nrow=2)
 
 #Figure 3: scatter plots with r squared
 

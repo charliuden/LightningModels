@@ -19,13 +19,13 @@ data {
 
 parameters {
   real<lower=0> a_alpha;                // Intercept for alpha
-  real<lower=0> b_alpha;                // Coefficient for SWR in alpha
-  real<lower=0> c_alpha;                // Coefficient for T in alpha
-  real<lower=0> d_alpha;                // Coefficient for RH in alpha
+  real b_alpha;                // Coefficient for SWR in alpha
+  real c_alpha;                // Coefficient for T in alpha
+  real d_alpha;                // Coefficient for RH in alpha
   real<lower=0> a_beta;    // Intercept for beta
-  real<lower=0> b_beta;    // Coefficient for SWR in beta
-  real<lower=0> c_beta;    // Coefficient for T in beta
-  real<lower=0> d_beta;    // Coefficient for RH in beta
+  real b_beta;    // Coefficient for SWR in beta
+  real c_beta;    // Coefficient for T in beta
+  real d_beta;    // Coefficient for RH in beta
 }
 
 model {

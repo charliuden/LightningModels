@@ -20,22 +20,22 @@ data {
 
 parameters {
   real<lower=0> a_alpha;                // Intercept for alpha
-  real<lower=0> b_alpha;                // Coefficient for SWR in alpha
-  real<lower=0> c_alpha;                // Coefficient for T in alpha
-  real<lower=0> d_alpha;                // Coefficient for RH in alpha
-  real<lower=0> e_alpha;                // Coefficient for W in alpha
+  real b_alpha;                // Coefficient for SWR in alpha
+  real c_alpha;                // Coefficient for T in alpha
+  real d_alpha;                // Coefficient for RH in alpha
+  real e_alpha;                // Coefficient for W in alpha
   real<lower=0> a_beta;    // Intercept for beta
-  real<lower=0> b_beta;    // Coefficient for SWR in beta
-  real<lower=0> c_beta;    // Coefficient for T in beta
-  real<lower=0> d_beta;    // Coefficient for RH in beta
-  real<lower=0> e_beta;    // Coefficient for W in beta
+  real b_beta;    // Coefficient for SWR in beta
+  real c_beta;    // Coefficient for T in beta
+  real d_beta;    // Coefficient for RH in beta
+  real e_beta;    // Coefficient for W in beta
 }
 
 model {
-  vector[N] alpha;             // Mean for the normal distribution
-  vector[N] beta;          // Standard deviation for the normal distribution
+  vector[N] alpha;             //shape and scale
+  vector[N] beta;          
 
-  // Define alpha and beta as functions of SWR and T
+  // Define alpha and beta as functions of climate vars
   alpha = a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH + e_alpha * W;
   beta = a_beta + b_beta * SWR + c_beta * T + d_beta * RH + e_beta * W;
 
@@ -43,16 +43,16 @@ model {
   S ~ gamma(alpha, beta);
 
   // Priors
-  a_alpha ~ exponential(1);     // Prior for intercept of alpha
-  b_alpha ~ exponential(1);     // Prior for SWR coefficient in alpha
-  c_alpha ~ exponential(1);     // Prior for T coefficient in alpha
-  d_alpha ~ exponential(1);     // Prior for RH coefficient in alpha
-  e_alpha ~ exponential(1);     // Prior for W coefficient in alpha
-  a_beta ~ exponential(1);   // Prior for intercept of beta
-  b_beta ~ exponential(1);   // Prior for SWR coefficient in beta
-  c_beta ~ exponential(1);   // Prior for T coefficient in beta
-  d_beta ~ exponential(1);   // Prior for RH coefficient in beta
-  e_beta ~ exponential(1);   // Prior for W coefficient in beta
+  a_alpha ~ normal(0, 2);     // Prior for intercept of alpha
+  b_alpha ~ normal(0, 2);     // Prior for SWR coefficient in alpha
+  c_alpha ~ normal(0, 2);     // Prior for T coefficient in alpha
+  d_alpha ~ normal(0, 2);     // Prior for RH coefficient in alpha
+  e_alpha ~ normal(0, 2);     // Prior for W coefficient in alpha
+  a_beta ~ normal(0, 2);   // Prior for intercept of beta
+  b_beta ~ normal(0, 2);   // Prior for SWR coefficient in beta
+  c_beta ~ normal(0, 2);   // Prior for T coefficient in beta
+  d_beta ~ normal(0, 2);   // Prior for RH coefficient in beta
+  e_beta ~ normal(0, 2);   // Prior for W coefficient in beta
 }
 
 generated quantities {

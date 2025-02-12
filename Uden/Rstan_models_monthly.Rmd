@@ -1,5 +1,5 @@
 ---
-title: "Rstan Gamma Models: Seasonal"
+title: "Rstan Gamma Models: Monthly"
 author: "Charlotte Uden"
 date: "2024-11-27"
 output: html_document
@@ -20,8 +20,8 @@ library(caret)
 
 
 ```{r, echo=FALSE}
-data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummerSummaries_2005-2010_NEclip.csv")[,2:16]
-colnames(data) <- c("lat", "lon", "year", "strikes", "cape", "precip", "cxp", "d2m", "tair", "wind", "swr", "sp", "rh", "tmin", "tmax")
+data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummaries_2005-2010_NEclip.csv")[,2:17]
+colnames(data) <- c("lat", "lon", "year", "month", "strikes", "cape", "precip", "cxp", "d2m", "tair", "wind", "swr", "sp", "rh", "tmin", "tmax")
 hist(data$strikes, breaks = 30)
 ```
 
@@ -92,6 +92,8 @@ test <- test[,c("strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp",
 
 ```
 
+
+
 ```{r, echo=FALSE, results='hide', include=FALSE}
 
 #library(rstan)
@@ -101,18 +103,18 @@ dat <- list(
   S = train$strikes
 )
 
-if (!file.exists("compiled_gamma_m001.rds")) {
+if (!file.exists("compiled_normal_monthly_m01.rds")) {
   m0.1 <- stan(file = "normal.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m0.1, file = "compiled_gamma_m001.rds")
+    saveRDS(m0.1, file = "compiled_normal_monthly_m01.rds")
     } else {
-      m0.1 <- readRDS("compiled_gamma_m001.rds")
+      m0.1 <- readRDS("compiled_normal_monthly_m01.rds")
     }
 
-
 ```
+
 
 ```{r}
 print(m0.1, pars = c("mu", "sigma"))
@@ -165,7 +167,7 @@ print(loo_result_m0.1)
 
 rmse_m0.1 <- RMSE(simStrikes, test$strikes)
 
-param_table <- data.frame(scale = c("seasonal"),
+param_table <- data.frame(scale = c("monthly"),
                           distribution = c("normal"),
                           model_name = c("m0.1"),
                           climate_var = NA,
@@ -184,62 +186,18 @@ param_table <- data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA)
+                          g_beta = NA,
+                          pi = NA,
+                          a_pi = NA,
+                          b_pi = NA,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA) 
 
 ```
 
-
-
-```{r, echo=FALSE, results='hide', include=FALSE}
-# 
-# #library(rstan)
-# 
-# dat <- list(
-#   N = nrow(train),
-#   S = train$strikes
-# )
-# 
-# 
-# # Compile and fit the Stan model
-# m0.2 <- stan(file = "normal_truncated.stan", data = dat, 
-#            iter = 2000, 
-#            chains = 4, 
-#            cores = min(parallel::detectCores(), 4))
-# 
-# print(m2, pars = c("mu", "sigma"))
-# 
-# traceplot(m2)
-# 
-# parameter_stats <- summary(m2)$summary[, c("mean", "sd")][-3,]
-# print(parameter_stats[-3,])
-# 
-# summary_table <- data.frame(
-#   parameter = rownames(parameter_stats),
-#   mean = parameter_stats[, "mean"],
-#   sd = parameter_stats[, "sd"]
-# )
-# 
-# ggplot(summary_table, aes(x = parameter, y = mean)) +
-#   geom_point(color = "blue", size = 3) +  # Point for the mean
-#   geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
-#   labs(y = "Parameter Estimate", x = "Parameter") +
-#   theme_minimal() +
-#   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-#   ggtitle("Parameter Means and SDs from Stan Model")
-# 
-# #predictions 
-# mean_mu <- summary_table["mu", "mean"]
-# mean_sigma <- summary_table["sigma", "mean"]
-# 
-# simStrikes <- rnorm(length(test$strikes), mean_mu, mean_sigma)
-# 
-# simStrikes <- pmax(0, simStrikes)
-# 
-# hist(simStrikes, breaks=30, main = "predictions")
-# 
-# hist(test$strikes, breaks=30, main = "observations")
-
-```
 
 ```{r, echo=FALSE, results='hide', include=FALSE}
 
@@ -250,26 +208,27 @@ dat <- list(
   S = train$strikes
 )
 
-if (!file.exists("compiled_gamma_m003.rds")) {
-  m0.3 <- stan(file = "gamma.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m03.rds")) {
+  m0.3 <- stan(file = "ZIG.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m0.3, file = "compiled_gamma_m003.rds")
+    saveRDS(m0.3, file = "compiled_ZIG_monthly_m03.rds")
     } else {
-      m0.3 <- readRDS("compiled_gamma_m003.rds")
+      m0.3 <- readRDS("compiled_ZIG_monthly_m03.rds")
     }
+
 
 ```
 
 
 ```{r}
 
-print(m0.3, pars = c("alpha", "beta"))
+print(m0.3, pars = c("alpha", "beta", "pi"))
 
 traceplot(m0.3)
 
-parameter_stats <- summary(m0.3)$summary[, c("mean", "sd")][1:2, 1:2]
+parameter_stats <- summary(m0.3)$summary[, c("mean", "sd")][1:3, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -289,8 +248,17 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
 #predictions 
 mean_alpha <- summary_table["alpha", "mean"]
 mean_beta <- summary_table["beta", "mean"]
+mean_pi <- summary_table["pi", "mean"]
 
-simStrikes <- rgamma(length(test$strikes), mean_alpha, mean_beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = mean_pi)  # 1 if zero, 0 if non-zero
+simStrikes <- ifelse(
+  is_zero == 1,  # If the binomial result is 1, it's a zero
+  0,  # Zero value
+  rgamma(n_predictions, mean_alpha, mean_beta)  # Non-zero values follow a gamma distribution
+)
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -315,8 +283,8 @@ print(loo_result_m0.3)
 rmse_m0.3 <- RMSE(simStrikes, test$strikes)
 
 #build table of parameters:
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
-                          distribution = c("gamma"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
+                          distribution = c("ZIG"),
                           model_name = c("m0.3"),
                           climate_var = NA,
                           alpha = mean_alpha,
@@ -334,7 +302,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = mean_pi,
+                          a_pi = NA,
+                          b_pi = NA,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -355,14 +331,14 @@ dat <- list(
   CAPE = train$cape
 )
 
-if (!file.exists("compiled_gamma_m1.rds")) {
-  m1 <- stan(file = "gamma_cape.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m1.rds")) {
+  m1 <- stan(file = "ZIG_cape.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m1, file = "compiled_gamma_m1.rds")
+    saveRDS(m1, file = "compiled_ZIG_monthly_m1.rds")
     } else {
-      m1 <- readRDS("compiled_gamma_m1.rds")
+      m1 <- readRDS("compiled_ZIG_monthly_m1.rds")
     }
 
 ```
@@ -370,11 +346,11 @@ if (!file.exists("compiled_gamma_m1.rds")) {
 
 ```{r}
 
-print(m1, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+print(m1, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta", "a_pi", "b_pi"))
 
 traceplot(m1)
 
-parameter_stats <- summary(m1)$summary[, c("mean", "sd")][1:4, 1:2]
+parameter_stats <- summary(m1)$summary[, c("mean", "sd")][1:6, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -395,14 +371,23 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
 a_alpha <- summary_table["a_alpha", "mean"]
 b_alpha <- summary_table["b_alpha", "mean"]
 a_beta <- summary_table["a_beta", "mean"]
-b_beta  <- summary_table["b_beta ", "mean"]
-a_beta <- summary_table[3,2]
-b_beta  <- summary_table[4,2]
+b_beta  <- summary_table["b_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi  <- summary_table["b_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$cape
-beta <-  a_beta + b_beta * test$cape
+alpha <-  exp(a_alpha + b_alpha * test$cape)
+beta <-  exp(a_beta + b_beta * test$cape)
+pi <-  plogis(a_pi + b_pi * test$cape)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -431,7 +416,7 @@ print(loo_result_m1)
 
 rmse_m1 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m1"),
                           climate_var = c("CAPE"),
@@ -450,7 +435,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * CAPE"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -472,25 +465,25 @@ dat <- list(
 
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m2.rds")) {
-  m2 <- stan(file = "gamma_cxp.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m2.rds")) {
+  m2 <- stan(file = "ZIG_cxp.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m2, file = "compiled_gamma_m2.rds")
+    saveRDS(m2, file = "compiled_ZIG_monthly_m2.rds")
     } else {
-      m2 <- readRDS("compiled_gamma_m2.rds")
+      m2 <- readRDS("compiled_ZIG_monthly_m2.rds")
     }
 ```
 
 
 ```{r}
 
-print(m2, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+print(m2, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta", "a_pi", "b_pi"))
 
 traceplot(m2)
 
-parameter_stats <- summary(m2)$summary[, c("mean", "sd")][1:4, 1:2]
+parameter_stats <- summary(m2)$summary[, c("mean", "sd")][1:6, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -511,14 +504,23 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
 a_alpha <- summary_table["a_alpha", "mean"]
 b_alpha <- summary_table["b_alpha", "mean"]
 a_beta <- summary_table["a_beta", "mean"]
-b_beta  <- summary_table["b_beta ", "mean"]
-a_beta <- summary_table[3,2]
-b_beta  <- summary_table[4,2]
+b_beta  <- summary_table["b_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi  <- summary_table["b_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$cxp
-beta <-  a_beta + b_beta * test$cxp
+alpha <-  exp(a_alpha + b_alpha * test$cxp)
+beta <-  exp(a_beta + b_beta * test$cxp)
+pi <-  plogis(a_pi + b_pi * test$cxp)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -546,7 +548,7 @@ print(loo_result_m2)
 
 rmse_m2 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m2"),
                           climate_var = c("CXP"),
@@ -565,7 +567,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * CXP"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -577,8 +587,6 @@ beta = a_beta + b_beta * RH;
 
 ```{r, echo=FALSE, results='hide', include=FALSE}
 
-#library(rstan)
-
 dat <- list(
   N = nrow(train),
   S = train$strikes,
@@ -587,25 +595,25 @@ dat <- list(
 
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m3.rds")) {
-  m3 <- stan(file = "gamma_rh.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m3.rds")) {
+  m3 <- stan(file = "ZIG_rh.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m3, file = "compiled_gamma_m3.rds")
+    saveRDS(m3, file = "compiled_ZIG_monthly_m3.rds")
     } else {
-      m3 <- readRDS("compiled_gamma_m3.rds")
+      m3 <- readRDS("compiled_ZIG_monthly_m3.rds")
     }
 ```
 
 
 ```{r}
 
-print(m3, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+print(m3, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta", "a_pi", "b_pi"))
 
 traceplot(m3)
 
-parameter_stats <- summary(m3)$summary[, c("mean", "sd")][1:4, 1:2]
+parameter_stats <- summary(m3)$summary[, c("mean", "sd")][1:6, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -626,14 +634,25 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
 a_alpha <- summary_table["a_alpha", "mean"]
 b_alpha <- summary_table["b_alpha", "mean"]
 a_beta <- summary_table["a_beta", "mean"]
-b_beta  <- summary_table["b_beta ", "mean"]
-a_beta <- summary_table[3,2]
-b_beta  <- summary_table[4,2]
+b_beta  <- summary_table["b_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi  <- summary_table["b_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$rh
-beta <-  a_beta + b_beta * test$rh
+alpha <-  exp(a_alpha + b_alpha * test$rh)
+beta <-  exp(a_beta + b_beta * test$rh)
+pi <-  plogis(a_pi + b_pi * test$rh)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+plot(test$rh, pi)
+
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -661,7 +680,7 @@ print(loo_result_m3)
 
 rmse_m3 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m3"),
                           climate_var = c("RH"),
@@ -680,7 +699,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * RH"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -700,16 +727,27 @@ dat <- list(
   SWR = train$swr
 )
 
+init_function <- function() {
+  list(
+    a_alpha = 0.5,       # Initial guess for a_alpha
+    b_alpha = 0.1,     # Initial guess for b_alpha
+    a_beta = 1.5,        # Initial guess for a_beta
+    b_beta = 0.1,      # Initial guess for b_beta
+    a_pi = 0.5,        # Initial guess for a_pi (constrained to [0, 1])
+    b_pi = 0.1        # Initial guess for b_pi
+  )
+}
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m4.rds")) {
-  m4 <- stan(file = "gamma_swr.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m4.rds")) {
+  m4 <- stan(file = "ZIG_swr.stan", data = dat, 
            iter = 2000, 
+           init = init_function,
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m4, file = "compiled_gamma_m4.rds")
+    saveRDS(m4, file = "compiled_ZIG_monthly_m4.rds")
     } else {
-      m4 <- readRDS("compiled_gamma_m4.rds")
+      m4 <- readRDS("compiled_ZIG_monthly_m4.rds")
     }
 
 ```
@@ -717,11 +755,11 @@ if (!file.exists("compiled_gamma_m4.rds")) {
 
 ```{r}
 
-print(m4, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+print(m4, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta", "a_pi", "b_pi"))
 
 traceplot(m4)
 
-parameter_stats <- summary(m4)$summary[, c("mean", "sd")][1:4, 1:2]
+parameter_stats <- summary(m4)$summary[, c("mean", "sd")][1:6, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -738,18 +776,28 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   ggtitle("Parameter Means and SDs from Stan Model")
 
-#predictions 
+#predictions
 a_alpha <- summary_table["a_alpha", "mean"]
 b_alpha <- summary_table["b_alpha", "mean"]
 a_beta <- summary_table["a_beta", "mean"]
-b_beta  <- summary_table["b_beta ", "mean"]
-a_beta <- summary_table[3,2]
-b_beta  <- summary_table[4,2]
+b_beta  <- summary_table["b_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi  <- summary_table["b_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$swr
-beta <-  a_beta + b_beta * test$swr
+alpha <-  exp(a_alpha + b_alpha * test$swr)
+beta <-  exp(a_beta + b_beta * test$swr)
+pi <-  plogis(a_pi + b_pi * test$swr)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -777,7 +825,7 @@ print(loo_result_m4)
 
 rmse_m4 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m4"),
                           climate_var = c("SWR"),
@@ -796,7 +844,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * SWR"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 ```
 
 # M5: Temperature
@@ -817,25 +873,25 @@ dat <- list(
 
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m5.rds")) {
-  m5 <- stan(file = "gamma_tair.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m5.rds")) {
+  m5 <- stan(file = "ZIG_tair.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m5, file = "compiled_gamma_m5.rds")
+    saveRDS(m5, file = "compiled_ZIG_monthly_m5.rds")
     } else {
-      m5 <- readRDS("compiled_gamma_m5.rds")
+      m5 <- readRDS("compiled_ZIG_monthly_m5.rds")
     }
 ```
 
 
 ```{r}
 
-print(m5, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+print(m5, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta", "a_pi", "b_pi"))
 
 traceplot(m5)
 
-parameter_stats <- summary(m5)$summary[, c("mean", "sd")][1:4, 1:2]
+parameter_stats <- summary(m5)$summary[, c("mean", "sd")][1:6, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -856,14 +912,24 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
 a_alpha <- summary_table["a_alpha", "mean"]
 b_alpha <- summary_table["b_alpha", "mean"]
 a_beta <- summary_table["a_beta", "mean"]
-b_beta  <- summary_table["b_beta ", "mean"]
-a_beta <- summary_table[3,2]
-b_beta  <- summary_table[4,2]
+b_beta  <- summary_table["b_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi  <- summary_table["b_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$tair
-beta <-  a_beta + b_beta * test$tair
+alpha <-  exp(a_alpha + b_alpha * test$tair)
+beta <-  exp(a_beta + b_beta * test$tair)
+pi <-  plogis(a_pi + b_pi * test$tair)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -892,7 +958,7 @@ print(loo_result_m5)
 
 rmse_m5 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m5"),
                           climate_var = c("T"),
@@ -911,7 +977,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * T"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -931,16 +1005,26 @@ dat <- list(
   SP = train$sp
 )
 
+# init_function <- function() {
+#   list(
+#     a_alpha = 1,       # Initial guess for a_alpha
+#     b_alpha = 1,     # Initial guess for b_alpha
+#     a_beta = 1,        # Initial guess for a_beta
+#     b_beta = 0,      # Initial guess for b_beta
+#     a_pi = 1,        # Initial guess for a_pi (constrained to [0, 1])
+#     b_pi = 0        # Initial guess for b_pi
+#   )
+# }
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m6.rds")) {
-  m6 <- stan(file = "gamma_sp.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m6.rds")) {
+  m6 <- stan(file = "ZIG_sp.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m6, file = "compiled_gamma_m6.rds")
+    saveRDS(m6, file = "compiled_ZIG_monthly_m6.rds")
     } else {
-      m6 <- readRDS("compiled_gamma_m6.rds")
+      m6 <- readRDS("compiled_ZIG_monthly_m6.rds")
     }
 ```
 
@@ -951,7 +1035,7 @@ print(m6, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
 
 traceplot(m6)
 
-parameter_stats <- summary(m6)$summary[, c("mean", "sd")][1:4, 1:2]
+parameter_stats <- summary(m6)$summary[, c("mean", "sd")][1:6, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -972,14 +1056,24 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
 a_alpha <- summary_table["a_alpha", "mean"]
 b_alpha <- summary_table["b_alpha", "mean"]
 a_beta <- summary_table["a_beta", "mean"]
-b_beta  <- summary_table["b_beta ", "mean"]
-a_beta <- summary_table[3,2]
-b_beta  <- summary_table[4,2]
+b_beta  <- summary_table["b_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi  <- summary_table["b_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$sp
-beta <-  a_beta + b_beta * test$sp
+alpha <-  exp(a_alpha + b_alpha * test$sp)
+beta <-  exp(a_beta + b_beta * test$sp)
+pi <-  plogis(a_pi + b_pi * test$sp)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -1007,7 +1101,7 @@ print(loo_result_m6)
 
 rmse_m6 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m6"),
                           climate_var = c("SP"),
@@ -1026,7 +1120,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * SP"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -1049,14 +1151,14 @@ dat <- list(
 
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m7.rds")) {
-  m7 <- stan(file = "gamma_precip.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m7.rds")) {
+  m7 <- stan(file = "ZIG_precip.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m7, file = "compiled_gamma_m7.rds")
+    saveRDS(m7, file = "compiled_ZIG_monthly_m7.rds")
     } else {
-      m7 <- readRDS("compiled_gamma_m7.rds")
+      m7 <- readRDS("compiled_ZIG_monthly_m7.rds")
     }
 ```
 
@@ -1067,7 +1169,7 @@ print(m7, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
 
 traceplot(m7)
 
-parameter_stats <- summary(m7)$summary[, c("mean", "sd")][1:4, 1:2]
+parameter_stats <- summary(m7)$summary[, c("mean", "sd")][1:6, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -1088,14 +1190,24 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
 a_alpha <- summary_table["a_alpha", "mean"]
 b_alpha <- summary_table["b_alpha", "mean"]
 a_beta <- summary_table["a_beta", "mean"]
-b_beta  <- summary_table["b_beta ", "mean"]
-a_beta <- summary_table[3,2]
-b_beta  <- summary_table[4,2]
+b_beta  <- summary_table["b_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi  <- summary_table["b_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$precip
-beta <-  a_beta + b_beta * test$precip
+alpha <-  exp(a_alpha + b_alpha * test$precip)
+beta <-  exp(a_beta + b_beta * test$precip)
+pi <-  plogis(a_pi + b_pi * test$precip)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -1123,7 +1235,7 @@ print(loo_result_m7)
 
 rmse_m7 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m7"),
                           climate_var = c("P"),
@@ -1142,7 +1254,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * P"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -1164,25 +1284,25 @@ dat <- list(
 
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m8.rds")) {
-  m8 <- stan(file = "gamma_wind.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m8.rds")) {
+  m8 <- stan(file = "ZIG_wind.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m8, file = "compiled_gamma_m8.rds")
+    saveRDS(m8, file = "compiled_ZIG_monthly_m8.rds")
     } else {
-      m8 <- readRDS("compiled_gamma_m8.rds")
+      m8 <- readRDS("compiled_ZIG_monthly_m8.rds")
     }
 ```
 
 
 ```{r}
 
-print(m8, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+print(m8, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta", "a_pi", "b_pi"))
 
 traceplot(m8)
 
-parameter_stats <- summary(m8)$summary[, c("mean", "sd")][1:4, 1:2]
+parameter_stats <- summary(m8)$summary[, c("mean", "sd")][1:6, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -1203,14 +1323,24 @@ ggplot(summary_table, aes(x = parameter, y = mean)) +
 a_alpha <- summary_table["a_alpha", "mean"]
 b_alpha <- summary_table["b_alpha", "mean"]
 a_beta <- summary_table["a_beta", "mean"]
-b_beta  <- summary_table["b_beta ", "mean"]
-a_beta <- summary_table[3,2]
-b_beta  <- summary_table[4,2]
+b_beta  <- summary_table["b_beta", "mean"]
+a_pi <- summary_table["b_pi", "mean"]
+b_pi  <- summary_table["b_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$wind
-beta <-  a_beta + b_beta * test$wind
+alpha <-  exp(a_alpha + b_alpha * test$wind)
+beta <-  exp(a_beta + b_beta * test$wind)
+pi <-  plogis(a_pi + b_pi * test$wind)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -1238,7 +1368,7 @@ print(loo_result_m8)
 
 rmse_m8 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m8"),
                           climate_var = c("W"),
@@ -1257,7 +1387,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * W"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = NA,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -1282,7 +1420,7 @@ colnames(model_comparison) <- colnames
 
 model_comparison
 ```
-The highest elpd_loo scores are cape and cape x precip. of the surface level climate variables, short wave radiation and temperature perform best, followed by relative humidity, wind, precipitation, and surface pressure. WAIC scores also indicate that short wave radiation and temperature are the best surface level climate predictors of lighting. Interestingly, the simple gamma model (m0.3) performs even better than models that include climate. Perhaps this is because WAIC takes number of parameters into cnsiteration. 
+The highest elpd_loo scores are cape and cape x precip. of the surface level climate variables, short wave radiation and temperature perform best, followed by, wind, precipitation, and surface pressure. WAIC scores also indicate that short wave radiation and temperature are the best surface level climate predictors of lighting. Interestingly, the simple gamma model (m0.3) performs even better than models that include climate. Perhaps this is because WAIC takes number of parameters into cnsiteration. 
 
 # M9: Short Wave Radiation + Temperature
 
@@ -1306,25 +1444,25 @@ dat <- list(
 
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m9.rds")) {
-  m9 <- stan(file = "gamma_swr_tair.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m9.rds")) {
+  m9 <- stan(file = "ZIG_swr_tair.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m9, file = "compiled_gamma_m9.rds")
+    saveRDS(m9, file = "compiled_ZIG_monthly_m9.rds")
     } else {
-      m9 <- readRDS("compiled_gamma_m9.rds")
+      m9 <- readRDS("compiled_ZIG_monthly_m9.rds")
     }
 ```
 
 
 ```{r}
 
-print(m9, pars = c("a_alpha", "b_alpha", "c_alpha", "a_beta", "b_beta", "c_beta"))
+print(m9, pars = c("a_alpha", "b_alpha", "c_alpha", "a_beta", "b_beta", "c_beta", "a_pi", "b_pi", "c_pi"))
 
 traceplot(m9)
 
-parameter_stats <- summary(m9)$summary[, c("mean", "sd")][1:6, 1:2]
+parameter_stats <- summary(m9)$summary[, c("mean", "sd")][1:9, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -1348,11 +1486,24 @@ c_alpha <- summary_table["c_alpha", "mean"]
 a_beta  <- summary_table["a_beta", "mean"]
 b_beta <- summary_table["b_beta", "mean"]
 c_beta  <- summary_table["c_beta", "mean"]
+a_pi  <- summary_table["a_pi", "mean"]
+b_pi <- summary_table["b_pi", "mean"]
+c_pi  <- summary_table["c_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$swr + c_alpha * test$tair
-beta <-  a_beta + b_beta * test$swr + c_beta * test$tair
+alpha <-  exp(a_alpha + b_alpha * test$swr + c_alpha * test$tair)
+beta <-  exp(a_beta + b_beta * test$swr + c_beta * test$tair)
+pi <-  plogis(a_pi + b_pi * test$swr + c_pi * test$tair)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -1381,7 +1532,7 @@ print(loo_result_m9)
 
 rmse_m9 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m9"),
                           climate_var = c("SWR, T"),
@@ -1400,7 +1551,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = NA,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * SWR + c_pi * T"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = c_pi,
+                          d_pi = NA,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 This model performs a little bit better than the simple short wave radiation model (m4). 
@@ -1425,27 +1584,33 @@ dat <- list(
   RH = train$rh
 )
 
+init_list <- function() {
+  list(a_alpha = 1, b_alpha = 0.1, c_alpha = 0.1, d_alpha = 0.1,
+       a_beta = 0.1, b_beta = 0.1, c_beta = 0.1, d_beta = 0.1, 
+       a_pi = 0.1, b_pi = 0.1, c_pi = 0.1, d_pi = 0.1)
+}
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m12.rds")) {
-  m12 <- stan(file = "gamma_swr_tair_rh.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m12.rds")) {
+  m12 <- stan(file = "ZIG_swr_tair_rh.stan", data = dat, 
            iter = 2000, 
-           chains = 4, 
+           chains = 4,
+           init=init_list,
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m12, file = "compiled_gamma_m12.rds")
+    saveRDS(m12, file = "compiled_ZIG_monthly_m12.rds")
     } else {
-      m12 <- readRDS("compiled_gamma_m12.rds")
+      m12 <- readRDS("compiled_ZIG_monthly_m12.rds")
     }
 ```
 
 
 ```{r}
 
-print(m12, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "a_beta", "b_beta", "c_beta", "d_beta"))
+print(m12, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "a_pi", "b_pi", "c_pi", "d_pi"))
 
 traceplot(m12)
 
-parameter_stats <- summary(m12)$summary[, c("mean", "sd")][1:8, 1:2]
+parameter_stats <- summary(m12)$summary[, c("mean", "sd")][1:12, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -1471,11 +1636,25 @@ a_beta  <- summary_table["a_beta", "mean"]
 b_beta <- summary_table["b_beta", "mean"]
 c_beta  <- summary_table["c_beta", "mean"]
 d_beta  <- summary_table["d_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi <- summary_table["b_pi", "mean"]
+c_pi <- summary_table["c_pi", "mean"]
+d_pi <- summary_table["d_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh
-beta <-  a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh
+alpha <-  exp(a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh)
+beta <-  exp(a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh)
+pi <-  plogis(a_pi + b_pi * test$swr + c_pi * test$tair + d_pi * test$rh)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -1505,7 +1684,7 @@ print(loo_result_m12)
 
 rmse_m12 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m12"),
                           climate_var = c("SWR, T, RH"),
@@ -1524,7 +1703,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = d_beta,
                           e_beta = NA,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = ("a_pi + b_pi * SWR + c_pi * T + d_pi * RH"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = c_pi,
+                          d_pi = d_pi,
+                          e_pi = NA,
+                          f_pi = NA,
+                          g_pi = NA))
 
 
 ```
@@ -1552,25 +1739,25 @@ dat <- list(
 
 
 # Compile and fit the Stan model
-if (!file.exists("compiled_gamma_m13.rds")) {
-  m13 <- stan(file = "gamma_swr_tair_rh_wind.stan", data = dat, 
+if (!file.exists("compiled_ZIG_monthly_m13.rds")) {
+  m13 <- stan(file = "ZIG_swr_tair_rh_wind.stan", data = dat, 
            iter = 2000, 
            chains = 4, 
            cores = min(parallel::detectCores(), 4))
-    saveRDS(m13, file = "compiled_gamma_m13.rds")
+    saveRDS(m13, file = "compiled_ZIG_monthly_m13.rds")
     } else {
-      m13 <- readRDS("compiled_gamma_m13.rds")
+      m13 <- readRDS("compiled_ZIG_monthly_m13.rds")
     }
 ```
 
 
 ```{r}
 
-print(m13, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta"))
+print(m13, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta", "a_pi", "b_pi", "c_pi", "d_pi", "e_pi"))
 
 traceplot(m13)
 
-parameter_stats <- summary(m13)$summary[, c("mean", "sd")][1:10, 1:2]
+parameter_stats <- summary(m13)$summary[, c("mean", "sd")][1:15, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -1598,11 +1785,26 @@ b_beta <- summary_table["b_beta", "mean"]
 c_beta <- summary_table["c_beta", "mean"]
 d_beta <- summary_table["d_beta", "mean"]
 e_beta <- summary_table["e_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi <- summary_table["b_pi", "mean"]
+c_pi <- summary_table["c_pi", "mean"]
+d_pi <- summary_table["d_pi", "mean"]
+e_pi <- summary_table["e_pi", "mean"]
 
-alpha <-  a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh + e_alpha * test$wind
-beta <-  a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh + e_beta * test$wind
+alpha <-  exp(a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh + e_alpha * test$wind)
+beta <-  exp(a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh + e_beta * test$wind)
+pi <-  plogis(a_pi + b_pi * test$swr + c_pi * test$tair + d_pi * test$rh + e_pi * test$wind)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -1632,7 +1834,7 @@ print(loo_result_m13)
 
 rmse_m13 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m13"),
                           climate_var = c("SWR, T, RH, W"),
@@ -1651,7 +1853,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = d_beta,
                           e_beta = e_beta,
                           f_beta = NA,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = ("a_pi + b_pi * SWR + c_pi * T + d_pi * RH + e_pi * W"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = c_pi,
+                          d_pi = d_pi,
+                          e_pi = e_pi,
+                          f_pi = NA,
+                          g_pi = NA))
 
 ```
 
@@ -1678,21 +1888,22 @@ dat <- list(
 
 
 # Compile and fit the Stan model
-init_list <- function() {
-  list(a_alpha = 0.1, b_alpha = 0.1, c_alpha = 0.1, d_alpha = 0.1, e_alpha = 0.1, f_alpha = 0.1,
-       a_beta = 0.1, b_beta = 0.1, c_beta = 0.1, d_beta = 0.1, e_beta = 0.1, f_beta = 0.1)
-}
+# init_list <- function() {
+#   list(a_alpha = 0.1, b_alpha = 0.1, c_alpha = 0.1, d_alpha = 0.1, e_alpha = 0.1, f_alpha = 0.1,
+#        a_beta = 0.1, b_beta = 0.1, c_beta = 0.1, d_beta = 0.1, e_beta = 0.1, f_beta = 0.1,
+#        a_pi = 0.1, b_pi = 0.1, c_pi = 0.1, d_pi = 0.1, e_pi = 0.1, f_pi = 0.1)
+# }
 
-if (!file.exists("compiled_gamma_m14.rds")) {
-  m14 <- stan(file = "gamma_swr_tair_rh_wind_precip.stan", 
+if (!file.exists("compiled_ZIG_monthly_m14.rds")) {
+  m14 <- stan(file = "ZIG_swr_tair_rh_wind_precip.stan", 
             data = dat,
             iter = 2000, 
             chains = 4, 
             init = init_list,
             cores = min(parallel::detectCores(), 4))
-    saveRDS(m14, file = "compiled_gamma_m14.rds")
+    saveRDS(m14, file = "compiled_ZIG_monthly_m14.rds")
     } else {
-      m14 <- readRDS("compiled_gamma_m14.rds")
+      m14 <- readRDS("compiled_ZIG_monthly_m14.rds")
     }
 
 ```
@@ -1700,11 +1911,11 @@ if (!file.exists("compiled_gamma_m14.rds")) {
 
 ```{r}
 
-print(m14, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "f_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta", "f_beta"))
+print(m14, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "f_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta", "f_beta", "a_pi", "b_pi", "c_pi", "d_pi", "e_pi", "f_pi"))
 
 traceplot(m14)
 
-parameter_stats <- summary(m14)$summary[, c("mean", "sd")][1:12, 1:2]
+parameter_stats <- summary(m14)$summary[, c("mean", "sd")][1:18, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -1734,11 +1945,27 @@ c_beta <- summary_table["c_beta", "mean"]
 d_beta <- summary_table["d_beta", "mean"]
 e_beta <- summary_table["e_beta", "mean"]
 f_beta <- summary_table["f_beta", "mean"]
+a_pi <- summary_table["a_pi", "mean"]
+b_pi <- summary_table["b_pi", "mean"]
+c_pi <- summary_table["c_pi", "mean"]
+d_pi <- summary_table["d_pi", "mean"]
+e_pi <- summary_table["e_pi", "mean"]
+f_pi <- summary_table["f_pi", "mean"]
 
 alpha <-  exp(a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh + e_alpha * test$wind + f_alpha * test$precip)
 beta <-  exp(a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh + e_beta * test$wind + f_beta * test$precip)
+pi <-  plogis(a_pi + b_pi * test$swr + c_pi * test$tair + d_pi * test$rh + e_pi * test$wind + f_pi * test$precip)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -1768,7 +1995,7 @@ print(loo_result_m14)
 
 rmse_m14 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m14"),
                           climate_var = c("SWR, T, RH, W, P"),
@@ -1787,7 +2014,15 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = d_beta,
                           e_beta = e_beta,
                           f_beta = f_beta,
-                          g_beta = NA))
+                          g_beta = NA,
+                          pi = c("a_pi + b_pi * SWR + c_pi * T + d_pi * RH + e_pi * W + f_pi * P"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = c_pi,
+                          d_pi = d_pi,
+                          e_pi = e_pi,
+                          f_pi = f_pi,
+                          g_pi = NA))
 ```
 
 # M15: Short Wave Radiation + Temperature + Precipitation + Wind + Precipitation + Surface Pressure
@@ -1817,19 +2052,20 @@ dat <- list(
 # Compile and fit the Stan model
 init_list <- function() {
   list(a_alpha = 0.1, b_alpha = 0.1, c_alpha = 0.1, d_alpha = 0.1, e_alpha = 0.1, f_alpha = 0.1, g_alpha = 0.1,
-       a_beta = 0.1, b_beta = 0.1, c_beta = 0.1, d_beta = 0.1, e_beta = 0.1, f_beta = 0.1, g_beta = 0.1)
+       a_beta = 0.1, b_beta = 0.1, c_beta = 0.1, d_beta = 0.1, e_beta = 0.1, f_beta = 0.1, g_beta = 0.1,
+       a_pi = 0.1, b_pi = 0.1, c_pi = 0.1, d_pi = 0.1, e_pi = 0.1, f_pi = 0.1, g_pi = 0.1)
 }
 
-if (!file.exists("compiled_gamma_m15.rds")) {
-  m15 <- stan(file = "gamma_swr_tair_rh_wind_precip_sp.stan", 
+if (!file.exists("compiled_ZIG_monthly_m15.rds")) {
+  m15 <- stan(file = "ZIG_swr_tair_rh_wind_precip_sp.stan", 
             data = dat,
             iter = 2000, 
             chains = 4, 
             init = init_list,
             cores = min(parallel::detectCores(), 4))
-    saveRDS(m15, file = "compiled_gamma_m15.rds")
+    saveRDS(m15, file = "compiled_ZIG_monthly_m15.rds")
     } else {
-      m15 <- readRDS("compiled_gamma_m15.rds")
+      m15 <- readRDS("compiled_ZIG_monthly_m15.rds")
     }
 
 ```
@@ -1837,11 +2073,11 @@ if (!file.exists("compiled_gamma_m15.rds")) {
 
 ```{r}
 
-print(m15, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "f_alpha", "g_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta", "f_beta", "g_beta"))
+print(m15, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "f_alpha", "g_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta", "f_beta", "g_beta", "a_pi", "b_pi", "c_pi", "d_pi", "e_pi", "f_pi", "g_pi"))
 
 traceplot(m15)
 
-parameter_stats <- summary(m15)$summary[, c("mean", "sd")][1:14, 1:2]
+parameter_stats <- summary(m15)$summary[, c("mean", "sd")][1:21, 1:2]
 print(parameter_stats)
 
 summary_table <- data.frame(
@@ -1873,11 +2109,28 @@ d_beta <- summary_table["d_beta", "mean"]
 e_beta <- summary_table["e_beta", "mean"]
 f_beta <- summary_table["f_beta", "mean"]
 g_beta <- summary_table["g_beta", "mean"]
+a_pi<- summary_table["a_pi", "mean"]
+b_pi <- summary_table["b_pi", "mean"]
+c_pi <- summary_table["c_pi", "mean"]
+d_pi <- summary_table["d_pi", "mean"]
+e_pi <- summary_table["e_pi", "mean"]
+f_pi <- summary_table["f_pi", "mean"]
+g_pi <- summary_table["g_pi", "mean"]
 
 alpha <-  exp(a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh + e_alpha * test$wind + f_alpha * test$precip + g_alpha * test$sp)
 beta <-  exp(a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh + e_beta * test$wind + f_beta * test$precip + g_beta * test$sp)
+pi <-  plogis(a_pi + b_pi * test$swr + c_pi * test$tair + d_pi * test$rh + e_pi * test$wind + f_pi * test$precip + g_pi * test$sp)
 
-simStrikes <- rgamma(length(test$strikes), alpha, beta)
+# Simulate zero-inflated gamma predictions
+n_predictions <- length(test$strikes)
+
+is_zero <- rbinom(n_predictions, size = 1, prob = pi)  
+simStrikes <- ifelse(
+  is_zero == 1,
+  0,  
+  rgamma(n_predictions, alpha, beta)  # Non-zero values follow a gamma distribution
+)
+
 
 hist(simStrikes, breaks=30, main = "predictions")
 
@@ -1906,7 +2159,7 @@ print(loo_result_m15)
 
 rmse_m15 <- RMSE(simStrikes, test$strikes)
 
-param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+param_table <- rbind(param_table, data.frame(scale = c("monthly"),
                           distribution = c("gamma"),
                           model_name = c("m15"),
                           climate_var = c("SWR, T, RH, W, P, SP"),
@@ -1925,16 +2178,24 @@ param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
                           d_beta = d_beta,
                           e_beta = e_beta,
                           f_beta = f_beta,
-                          g_beta = g_beta))
+                          g_beta = g_beta,
+                          pi = c("a_pi + b_pi * SWR + c_pi * T + d_pi * RH + e_pi * W + f_pi * P + g_pi * SP"),
+                          a_pi = a_pi,
+                          b_pi = b_pi,
+                          c_pi = c_pi,
+                          d_pi = d_pi,
+                          e_pi = e_pi,
+                          f_pi = f_pi,
+                          g_pi = g_pi))
 
-#write.csv(param_table, "/raid/cuden/data/gamma_seasonal_model_parameters.csv")
+write.csv(param_table_test, "/raid/cuden/data/gamma_monthly_model_parameters.csv")
 
 ```
 
 ```{r}
-colnames <- c("model", "climate_var", "elpd_loo", "p_loo", "looic", "elpd_waic", "p_waic", "waic")
+colnames <- c("model", "climate_var", "elpd_loo", "p_loo", "looic", "elpd_waic", "p_waic", "WAIC", "RMSE")
 model_comparison <- data.frame(rbind(c("m0.1", "normal", loo_result_m0.1$estimates[1,1], loo_result_m0.1$estimates[2,1], loo_result_m0.1$estimate[3,1], waic_result_m0.1$estimates[1,1], waic_result_m0.1$estimates[2,1], waic_result_m0.1$estimates[3,1], rmse_m0.1),
-      c("m0.3", "gamma", loo_result_m0.3$estimates[1,1], loo_result_m0.3$estimates[2,1], loo_result_m0.3$estimate[3,1], waic_result_m0.3$estimates[1,1], waic_result_m2$estimates[2,1], waic_result_m2$estimates[3,1], rmse_m0.3),
+      c("m0.3", "ZIG", loo_result_m0.3$estimates[1,1], loo_result_m0.3$estimates[2,1], loo_result_m0.3$estimate[3,1], waic_result_m0.3$estimates[1,1], waic_result_m2$estimates[2,1], waic_result_m2$estimates[3,1], rmse_m0.3),
   c("m1", "CAPE", loo_result_m1$estimates[1,1], loo_result_m1$estimates[2,1], loo_result_m1$estimate[3,1], waic_result_m1$estimates[1,1], waic_result_m1$estimates[2,1], waic_result_m1$estimates[3,1], rmse_m1),
   c("m2", "CXP", loo_result_m2$estimates[1,1], loo_result_m2$estimates[2,1], loo_result_m2$estimate[3,1], waic_result_m2$estimates[1,1], waic_result_m2$estimates[2,1], waic_result_m2$estimates[3,1], rmse_m2),
   c("m3", "rh", loo_result_m3$estimates[1,1], loo_result_m3$estimates[2,1], loo_result_m3$estimate[3,1], waic_result_m3$estimates[1,1], waic_result_m3$estimates[2,1], waic_result_m3$estimates[3,1], rmse_m3),
@@ -1949,17 +2210,22 @@ model_comparison <- data.frame(rbind(c("m0.1", "normal", loo_result_m0.1$estimat
   c("m14", "SWR+T+RH+W+P", loo_result_m14$estimates[1,1], loo_result_m14$estimates[2,1], loo_result_m14$estimates[3,1], waic_result_m14$estimates[1,1], waic_result_m14$estimates[2,1], waic_result_m14$estimates[3,1], rmse_m14),
   c("m15", "SWR+T+RH+W+P+SP", loo_result_m15$estimates[1,1], loo_result_m15$estimates[2,1], loo_result_m15$estimates[3,1], waic_result_m15$estimates[1,1], waic_result_m15$estimates[2,1], waic_result_m15$estimates[3,1], rmse_m15)))
 
-#model_comparison[,3:8] <- as.numeric(model_comparison[,3:8])
-
 colnames(model_comparison) <- colnames
 
+model_comparison[c("elpd_loo", "p_loo", "looic", "elpd_waic", "p_waic", "WAIC", "RMSE")] <- lapply(model_comparison[c("elpd_loo", "p_loo", "looic", "elpd_waic", "p_waic", "WAIC", "RMSE")], as.numeric)
+
+print(arrange(model_comparison, -elpd_loo))
+
 #write.csv(model_comparison, "/raid/cuden/data/gamma_monthly_model_comparison.csv")
-
-#print(arrange(model_comparison, waic))
-
-model_comparison
 ```
 M15, which includes all 6 surface level climate variables, performs best, with the lowest WAIC score and highest loo score. 
+
+
+```{r}
+ggplot() + geom_point(data=model_comparison, aes(x=elpd_loo, y = climate_var))
+ggplot() + geom_point(data=model_comparison, aes(x=WAIC, y = climate_var))
+ggplot() + geom_point(data=model_comparison, aes(x=RMSE, y = climate_var))
+```
 
 ```{r}
 

@@ -25,43 +25,36 @@ library(Metrics)
 library(ramify)
 library(cowplot)
 library(gridExtra)
+library(stats)
 
 df <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummaries_2005-2010_NEclip.csv")[,2:16]
-df <- df[,c("lon", "lat", "year", "mean_strike_rate", "cape_monthly_mean", "mtpr_monthly_mean", "cxp_monthly_mean")]
+df <- df[,c("lon", "lat", "year", "strikes", "cape", "precip", "cxp")]
 
-x <- df$cxp_monthly_mean
-y <- df$mean_strike_rate
+x <- df$cxp
+y <- df$strikes
 
 plot(x, y)
 
 #-- Power Law: FR = a(CAPE × Precip)^b -- 
-
 # Transform data
-log_x <- log(x)
-log_y <- log(y)
+log_x <- log(x) # standardize CAPE * precipitation
+log_y <- log(y + 0.0001) # lightning strike rate - add a small consgtant so that log(y) doesn not produce - inf.
 
-plot(log_x, log_y)
+# Fit the power law model in log-log space
+pl <- nls(log_y ~ log_a + b * log_x, 
+          start = list(log_a = 0, b = 1))
 
-#fit the model
-pl <- nls(log_y ~ a*log_x^b, 
-          start = list(a = -1, 
-                       b = -1))
-summary(pl)
+# Extract parameters
+log_a_pl <- coef(pl)["log_a"]
+b_pl <- coef(pl)["b"]
+a_pl <- exp(log_a_pl)  # Convert back to original scale
 
-curve.nlslrc = nlsLM(photolrc ~ Am*(1-((1-(Rd/Am))^(1-(PARlrc/LCP)))),
-                     start=list(Am=(max(photolrc)-min(photolrc)),
-                                Rd=-min(photolrc),
-                                LCP= (max(photolrc)-1)),
-                     data = curvelrc)
+# Predict flash rate using the fitted power law
+y_pred_pl <- a_pl * x^b_pl
 
-#parameter values
-a_pl <- summary(pl)$coefficients[1,1]
-b_pl <- summary(pl)$coefficients[2,1]
-
-#predict flash rate
-y_pred_pl <- a_pl*log_x^b_pl
-
-plot(x, y_pred_pl)
+# Plot results
+df_results <- as.data.frame(cbind(x=x, y=y, y_pred_pl = y_pred_pl))
+ggplot(df_results) + geom_point(aes(x=x, y=y)) + geom_line(aes(x=x, y = y_pred_pl, col="red"))
 
 #-- Power law (linear opt) --
 
