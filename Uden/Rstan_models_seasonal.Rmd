@@ -1,0 +1,2746 @@
+---
+title: "Rstan Gamma Models: Seasonal"
+author: "Charlotte Uden"
+date: "2024-11-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, include=FALSE}
+library(rstan)
+library(loo)
+library(dplyr)
+library(stats)
+library(caret)
+library(tidyr)
+library(gridExtra)
+library(mapdata)
+```
+1. Read in the data
+
+
+```{r, echo=FALSE}
+data <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummerSummaries_2005-2010_NEclip.csv")[,2:16]
+colnames(data) <- c("lon", "lat", "year", "strikes", "cape", "precip", "cxp", "d2m", "tair", "wind", "swr", "sp", "rh", "tmin", "tmax")
+hist(data$strikes, breaks = 30)
+```
+
+2. Split into training and testing data
+```{r, echo=FALSE}
+## 80% of the sample size
+sample_size <- floor(0.8 * nrow(data))
+
+## set the seed to make partition reproducible
+set.seed(123)
+train_index <- sample(seq_len(nrow(data)), size = sample_size)
+
+train <- data[train_index, ]
+test <- data[-train_index, ]
+
+```
+
+
+3. Standardize predictor variables 
+```{r, echo=FALSE}
+#save min and max (normalization parameters?):
+#-----
+mu_cxp <- mean(train$cxp)
+sigma_cxp <- sd(train$cxp)
+mu_cape <- mean(train$cape)
+sigma_cape <- sd(train$cape)
+mu_precip <- mean(train$precip)
+sigma_precip <- sd(train$precip)
+mu_tair <- mean(train$tair)
+sigma_tair <- sd(train$tair)
+mu_wind <- mean(train$wind)
+sigma_wind <- sd(train$wind)
+mu_swr <- mean(train$swr)
+sigma_swr <- sd(train$swr)
+mu_sp <- mean(train$sp)
+sigma_sp <- sd(train$sp)
+mu_rh <- mean(train$rh)
+sigma_rh <- sd(train$rh)
+#-----
+
+train <- train %>%
+  mutate(cape = (cape-mu_cape)/sigma_cape) %>%
+  mutate(precip = (precip-mu_precip)/sigma_precip) %>%
+  mutate(cxp = (cxp-mu_cxp)/sigma_cxp) %>%
+  mutate(tair = (tair-mu_tair)/sigma_tair) %>%
+  mutate(wind = (wind-mu_wind)/sigma_wind) %>%
+  mutate(swr = (swr-mu_swr)/sigma_swr) %>%
+  mutate(sp = (sp-mu_sp)/sigma_sp) %>%
+  mutate(rh = (rh-mu_rh)/sigma_rh) 
+
+train <- train[,c("strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+head(train)
+
+plot(train)
+
+#use the min and max values from the train set to normalize the test set 
+test <- test %>%
+  mutate(cape = (cape-mu_cape)/sigma_cape) %>%
+  mutate(precip = (precip-mu_precip)/sigma_precip) %>%
+  mutate(cxp = (cxp-mu_cxp)/sigma_cxp) %>%
+  mutate(tair = (tair-mu_tair)/sigma_tair) %>%
+  mutate(wind = (wind-mu_wind)/sigma_wind) %>%
+  mutate(swr = (swr-mu_swr)/sigma_swr) %>%
+  mutate(sp = (sp-mu_sp)/sigma_sp) %>%
+  mutate(rh = (rh-mu_rh)/sigma_rh) %>%
+  mutate(lon = lon) %>%
+  mutate(lat = lat)
+
+test <- test[,c("lon", "lat", "strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+
+```
+
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes
+)
+
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m001.rds")) {
+  m0.1 <- stan(file = "normal.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m0.1, file = "/raid/cuden/rds/compiled_gamma_m001.rds")
+    } else {
+      m0.1 <- readRDS("/raid/cuden/rds/compiled_gamma_m001.rds")
+    }
+
+
+```
+
+```{r}
+print(m0.1, pars = c("mu", "sigma"))
+
+traceplot(m0.1)
+
+parameter_stats <- summary(m0.1)$summary[, c("mean", "sd")][1:2,1:2]
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+mean_mu <- summary_table["mu", "mean"]
+mean_sigma <- summary_table["sigma", "mean"]
+
+simStrikes <- rnorm(length(test$strikes), mean_mu, mean_sigma)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+```
+Model Comparison in Rstan:
+Loo: Leave one out cross validation
+WAIC: widely applicable information criterion
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m0.1, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m0.1 <- waic(log_lik)
+# Calculate LOO
+loo_result_m0.1 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m0.1)
+print(loo_result_m0.1)
+
+rmse_m0.1 <- RMSE(simStrikes, test$strikes)
+
+param_table <- data.frame(scale = c("seasonal"),
+                          distribution = c("normal"),
+                          model_name = c("m0.1"),
+                          climate_var = NA,
+                          alpha = mean_mu,
+                          a_alpha = NA,
+                          b_alpha = NA,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = mean_sigma,
+                          a_beta = NA,
+                          b_beta = NA,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA)
+
+```
+
+
+
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes
+)
+
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m002.rds")) {
+  m0.2 <- stan(file = "gamma.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m0.2, file = "/raid/cuden/rds/compiled_gamma_m002.rds")
+    } else {
+      m0.2 <- readRDS("/raid/cuden/rds/compiled_gamma_m002.rds")
+    }
+
+```
+
+
+```{r}
+
+print(m0.2, pars = c("alpha", "beta"))
+
+traceplot(m0.2)
+
+parameter_stats <- summary(m0.2)$summary[, c("mean", "sd")][1:2, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+mean_alpha <- summary_table["alpha", "mean"]
+mean_beta <- summary_table["beta", "mean"]
+
+simStrikes <- rgamma(length(test$strikes), mean_alpha, mean_beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+```
+
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m0.2, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m0.2 <- waic(log_lik)
+# Calculate LOO
+loo_result_m0.2 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m0.2)
+print(loo_result_m0.2)
+
+rmse_m0.2 <- RMSE(simStrikes, test$strikes)
+
+#build table of parameters:
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m0.2"),
+                          climate_var = NA,
+                          alpha = mean_alpha,
+                          a_alpha = NA,
+                          b_alpha = NA,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = mean_beta,
+                          a_beta = NA,
+                          b_beta = NA,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+
+# M1: CAPE
+
+S ~ gamma(alpha, beta);
+alpha = a_alpha + b_alpha * CAPE;
+beta = a_beta + b_beta * CAPE;
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  CAPE = train$cape
+)
+
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m1.rds")) {
+  m1 <- stan(file = "gamma_cape.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m1, file = "/raid/cuden/rds/compiled_gamma_m1.rds")
+    } else {
+      m1 <- readRDS("/raid/cuden/rds/compiled_gamma_m1.rds")
+    }
+
+```
+
+
+```{r}
+
+print(m1, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+traceplot(m1)
+
+parameter_stats <- summary(m1)$summary[, c("mean", "sd")][1:4, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$cape
+beta <-  a_beta + b_beta * test$cape
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+plot(test$cape, simStrikes)
+plot(test$cape, test$strikes)
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m1, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m1 <- waic(log_lik)
+# Calculate LOO
+loo_result_m1 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m1)
+print(loo_result_m1)
+
+rmse_m1 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m1"),
+                          climate_var = c("CAPE"),
+                          alpha = c("a_alpha + b_alpha * CAPE"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * CAPE"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+# M2: CAPE x Precipitation
+
+S ~ gamma(alpha, beta);
+alpha = a_alpha + b_alpha * CXP;
+beta = a_beta + b_beta * CXP;
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  CXP = train$cxp
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m2.rds")) {
+  m2 <- stan(file = "gamma_cxp.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m2, file = "/raid/cuden/rds/compiled_gamma_m2.rds")
+    } else {
+      m2 <- readRDS("/raid/cuden/rds/compiled_gamma_m2.rds")
+    }
+```
+
+
+```{r}
+
+print(m2, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+traceplot(m2)
+
+parameter_stats <- summary(m2)$summary[, c("mean", "sd")][1:4, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$cxp
+beta <-  a_beta + b_beta * test$cxp
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+plot(test$cxp, simStrikes)
+plot(test$cxp, test$strikes)
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m2, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m2 <- waic(log_lik)
+# Calculate LOO
+loo_result_m2 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m2)
+print(loo_result_m2)
+
+rmse_m2 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m2"),
+                          climate_var = c("CXP"),
+                          alpha = c("a_alpha + b_alpha * CXP"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * CXP"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+# M3: Relative Humidity
+
+S ~ gamma(alpha, beta);
+alpha = a_alpha + b_alpha * RH;
+beta = a_beta + b_beta * RH;
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  RH = train$rh
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m3.rds")) {
+  m3 <- stan(file = "gamma_rh.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m3, file = "/raid/cuden/rds/compiled_gamma_m3.rds")
+    } else {
+      m3 <- readRDS("/raid/cuden/rds/compiled_gamma_m3.rds")
+    }
+```
+
+
+```{r}
+
+print(m3, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+traceplot(m3)
+
+parameter_stats <- summary(m3)$summary[, c("mean", "sd")][1:4, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$rh
+beta <-  a_beta + b_beta * test$rh
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+plot(test$rh, simStrikes)
+plot(test$rh, test$strikes)
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m3, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m3 <- waic(log_lik)
+# Calculate LOO
+loo_result_m3 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m3)
+print(loo_result_m3)
+
+rmse_m3 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m3"),
+                          climate_var = c("RH"),
+                          alpha = c("a_alpha + b_alpha * RH"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * RH"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+# M4: Short Wave Radiation
+
+S ~ gamma(alpha, beta);
+alpha = a_alpha + b_alpha * SWR;
+beta = a_beta + b_beta * SWR;
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  SWR = train$swr
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m4.rds")) {
+  m4 <- stan(file = "gamma_swr.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m4, file = "/raid/cuden/rds/compiled_gamma_m4.rds")
+    } else {
+      m4 <- readRDS("/raid/cuden/rds/compiled_gamma_m4.rds")
+    }
+
+```
+
+
+```{r}
+
+print(m4, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+traceplot(m4)
+
+parameter_stats <- summary(m4)$summary[, c("mean", "sd")][1:4, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$swr
+beta <-  a_beta + b_beta * test$swr
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+plot(test$swr, simStrikes)
+plot(test$swr, test$strikes)
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m4, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m4 <- waic(log_lik)
+# Calculate LOO
+loo_result_m4 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m4)
+print(loo_result_m4)
+
+rmse_m4 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m4"),
+                          climate_var = c("SWR"),
+                          alpha = c("a_alpha + b_alpha * SWR"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * SWR"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+```
+
+# M5: Temperature
+
+S ~ gamma(alpha, beta);
+alpha = a_alpha + b_alpha * T;
+beta = a_beta + b_beta * T;
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  T = train$tair
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m5.rds")) {
+  m5 <- stan(file = "gamma_tair.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m5, file = "/raid/cuden/rds/compiled_gamma_m5.rds")
+    } else {
+      m5 <- readRDS("/raid/cuden/rds/compiled_gamma_m5.rds")
+    }
+```
+
+
+```{r}
+
+print(m5, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+traceplot(m5)
+
+parameter_stats <- summary(m5)$summary[, c("mean", "sd")][1:4, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$tair
+beta <-  a_beta + b_beta * test$tair
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+plot(test$tair, simStrikes)
+plot(test$tair, test$strikes)
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m5, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m5 <- waic(log_lik)
+# Calculate LOO
+loo_result_m5 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m5)
+print(loo_result_m5)
+
+rmse_m5 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m5"),
+                          climate_var = c("T"),
+                          alpha = c("a_alpha + b_alpha * T"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * T"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+# M6: Surface Pressure
+
+S ~ gamma(alpha, beta);
+alpha = a_alpha + b_alpha * SP;
+beta = a_beta + b_beta * SP;
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  SP = train$sp
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m6.rds")) {
+  m6 <- stan(file = "gamma_sp.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m6, file = "/raid/cuden/rds/compiled_gamma_m6.rds")
+    } else {
+      m6 <- readRDS("/raid/cuden/rds/compiled_gamma_m6.rds")
+    }
+```
+
+
+```{r}
+
+print(m6, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+traceplot(m6)
+
+parameter_stats <- summary(m6)$summary[, c("mean", "sd")][1:4, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "blue", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$sp
+beta <-  a_beta + b_beta * test$sp
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+plot(test$sp, simStrikes)
+plot(test$sp, test$strikes)
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m6, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m6 <- waic(log_lik)
+# Calculate LOO
+loo_result_m6 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m6)
+print(loo_result_m6)
+
+rmse_m6 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m6"),
+                          climate_var = c("SP"),
+                          alpha = c("a_alpha + b_alpha * SP"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * SP"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+
+# M7: Precipitation
+
+S ~ gamma(alpha, beta);
+alpha = a_alpha + b_alpha * P;
+beta = a_beta + b_beta * P;
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  P = train$precip
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m7.rds")) {
+  m7 <- stan(file = "gamma_precip.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m7, file = "/raid/cuden/rds/compiled_gamma_m7.rds")
+    } else {
+      m7 <- readRDS("/raid/cuden/rds/compiled_gamma_m7.rds")
+    }
+```
+
+
+```{r}
+
+print(m7, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+traceplot(m7)
+
+parameter_stats <- summary(m7)$summary[, c("mean", "sd")][1:4, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "blue", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$precip
+beta <-  a_beta + b_beta * test$precip
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+plot(test$precip, simStrikes)
+plot(test$precip, test$strikes)
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m7, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m7 <- waic(log_lik)
+# Calculate LOO
+loo_result_m7 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m7)
+print(loo_result_m7)
+
+rmse_m7 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m7"),
+                          climate_var = c("P"),
+                          alpha = c("a_alpha + b_alpha * P"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * P"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+# M8: Wind
+
+S ~ gamma(alpha, beta);
+alpha = a_alpha + b_alpha * W;
+beta = a_beta + b_beta * W;
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  W = train$wind
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m8.rds")) {
+  m8 <- stan(file = "gamma_wind.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m8, file = "/raid/cuden/rds/compiled_gamma_m8.rds")
+    } else {
+      m8 <- readRDS("/raid/cuden/rds/compiled_gamma_m8.rds")
+    }
+```
+
+
+```{r}
+
+print(m8, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+traceplot(m8)
+
+parameter_stats <- summary(m8)$summary[, c("mean", "sd")][1:4, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "blue", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$wind
+beta <-  a_beta + b_beta * test$wind
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+plot(test$wind, simStrikes)
+plot(test$wind, test$strikes)
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m8, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m8 <- waic(log_lik)
+# Calculate LOO
+loo_result_m8 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m8)
+print(loo_result_m8)
+
+rmse_m8 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m8"),
+                          climate_var = c("W"),
+                          alpha = c("a_alpha + b_alpha * W"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = NA,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * W"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = NA,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+```{r}
+colnames <- c("model", "climate_var", "elpd_loo", "p_loo", "looic", "elpd_waic", "p_waic", "waic", "rmse")
+model_comparison <- data.frame(rbind(c("m0.1", "normal", loo_result_m0.1$estimates[1,1], loo_result_m0.1$estimates[2,1], loo_result_m0.1$estimate[3,1], waic_result_m0.1$estimates[1,1], waic_result_m0.1$estimates[2,1], waic_result_m0.1$estimates[3,1], rmse_m0.1),
+      c("m0.2", "gamma", loo_result_m0.2$estimates[1,1], loo_result_m0.2$estimates[2,1], loo_result_m0.2$estimate[3,1], waic_result_m0.2$estimates[1,1], waic_result_m0.2$estimates[2,1], waic_result_m0.2$estimates[3,1], rmse_m0.2),
+  c("m1", "CAPE", loo_result_m1$estimates[1,1], loo_result_m1$estimates[2,1], loo_result_m1$estimate[3,1], waic_result_m1$estimates[1,1], waic_result_m1$estimates[2,1], waic_result_m1$estimates[3,1], rmse_m1),
+  c("m2", "CXP", loo_result_m2$estimates[1,1], loo_result_m2$estimates[2,1], loo_result_m2$estimate[3,1], waic_result_m2$estimates[1,1], waic_result_m2$estimates[2,1], waic_result_m2$estimates[3,1], rmse_m2),
+  c("m3", "rh", loo_result_m3$estimates[1,1], loo_result_m3$estimates[2,1], loo_result_m3$estimate[3,1], waic_result_m3$estimates[1,1], waic_result_m3$estimates[2,1], waic_result_m3$estimates[3,1], rmse_m3),
+  c("m4", "swr", loo_result_m4$estimates[1,1], loo_result_m4$estimates[2,1], loo_result_m4$estimate[3,1], waic_result_m4$estimates[1,1], waic_result_m4$estimates[2,1], waic_result_m4$estimates[3,1], rmse_m4),
+  c("m5", "tair", loo_result_m5$estimates[1,1], loo_result_m5$estimates[2,1], loo_result_m5$estimate[3,1], waic_result_m5$estimates[1,1], waic_result_m5$estimates[2,1], waic_result_m5$estimates[3,1], rmse_m5),
+  c("m6", "sp", loo_result_m6$estimates[1,1], loo_result_m6$estimates[2,1], loo_result_m6$estimate[3,1], waic_result_m6$estimates[1,1], waic_result_m6$estimates[2,1], waic_result_m6$estimates[3,1], rmse_m6),
+  c("m7", "precip", loo_result_m7$estimates[1,1], loo_result_m7$estimates[2,1], loo_result_m7$estimate[3,1], waic_result_m7$estimates[1,1], waic_result_m7$estimates[2,1], waic_result_m7$estimates[3,1], rmse_m7),
+  c("m8", "wind", loo_result_m8$estimates[1,1], loo_result_m8$estimates[2,1], loo_result_m8$estimates[3,1], waic_result_m8$estimates[1,1], waic_result_m8$estimates[2,1], waic_result_m8$estimates[3,1], rmse_m8)))
+
+#model_comparison[,3:8] <- as.numeric(model_comparison[,3:8])
+
+colnames(model_comparison) <- colnames
+
+#print(arrange(model_comparison, waic))
+
+model_comparison
+```
+The highest elpd_loo scores are cape and cape x precip. of the surface level climate variables, short wave radiation and temperature perform best, followed by relative humidity, wind, precipitation, and surface pressure. WAIC scores also indicate that short wave radiation and temperature are the best surface level climate predictors of lighting. Interestingly, the simple gamma model (m0.3) performs even better than models that include climate. Perhaps this is because WAIC takes number of parameters into cnsiteration. 
+
+# M9: Short Wave Radiation + Temperature
+
+Lightning strike rate modeled from a dgamma distribution where mu and sigma are dependent on climate: shortwave radiation and temperature, where SWR and temp have additive affects. They contribute independently to the mean lightning strike rate and standard deviation. swr and temp do not interact; ie. the effect of SWR on lighting is the same regardless of the temperature outside. 
+
+    S ~ dgamma( mu , sigma )
+    mu <- a_alpha + b_alpha * SWR + c_alpha * T
+    sigma <- a_beta + b_beta * SWR + c_beta * T
+
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m9.rds")) {
+  m9 <- stan(file = "gamma_swr_tair.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m9, file = "/raid/cuden/rds/compiled_gamma_m9.rds")
+    } else {
+      m9 <- readRDS("/raid/cuden/rds/compiled_gamma_m9.rds")
+    }
+```
+
+
+```{r}
+
+print(m9, pars = c("a_alpha", "b_alpha", "c_alpha", "a_beta", "b_beta", "c_beta"))
+
+traceplot(m9)
+
+parameter_stats <- summary(m9)$summary[, c("mean", "sd")][1:6, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "blue", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+c_alpha <- summary_table["c_alpha", "mean"]
+a_beta  <- summary_table["a_beta", "mean"]
+b_beta <- summary_table["b_beta", "mean"]
+c_beta  <- summary_table["c_beta", "mean"]
+
+alpha <-  a_alpha + b_alpha * test$swr + c_alpha * test$tair
+beta <-  a_beta + b_beta * test$swr + c_beta * test$tair
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip)) + geom_point(aes(x=SWR, y=predicted, color=T))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip)) + geom_point(aes(x=SWR, y=observed, color=T))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m9, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m9 <- waic(log_lik)
+# Calculate LOO
+loo_result_m9 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m9)
+print(loo_result_m9)
+
+rmse_m9 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m9"),
+                          climate_var = c("SWR, T"),
+                          alpha = c("a_alpha + b_alpha * SWR + c_alpha * T"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = c_alpha,
+                          d_alpha = NA,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * SWR + c_beta * T"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = c_beta,
+                          d_beta = NA,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+This model performs a little bit better than the simple short wave radiation model (m4). 
+
+# M10: Short Wave Radiation + Temperature + Precipitation
+
+Lightning strike rate modeled from a dgamma distribution where mu and sigma are dependent on climate: shortwave radiation and temperature, where SWR and temp have additive affects. They contribute independently to the mean lightning strike rate and standard deviation. swr and temp do not interact; ie. the effect of SWR on lighting is the same regardless of the temperature outside. 
+
+    S ~ dgamma( mu , sigma ),
+    mu <- a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH,
+    sigma <- a_beta + b_beta * SWR + c_beta * T+ d_beta * RH,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair,
+  RH = train$rh
+)
+
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m10.rds")) {
+  m10 <- stan(file = "gamma_swr_tair_rh.stan", data = dat, 
+           iter = 2000, 
+           chains = 4, 
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m10, file = "/raid/cuden/rds/compiled_gamma_m10.rds")
+    } else {
+      m10 <- readRDS("/raid/cuden/rds/compiled_gamma_m10.rds")
+    }
+```
+
+
+```{r}
+
+print(m10, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "a_beta", "b_beta", "c_beta", "d_beta"))
+
+traceplot(m10)
+
+parameter_stats <- summary(m10)$summary[, c("mean", "sd")][1:8, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "blue", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+c_alpha <- summary_table["c_alpha", "mean"]
+d_alpha <- summary_table["d_alpha", "mean"]
+a_beta  <- summary_table["a_beta", "mean"]
+b_beta <- summary_table["b_beta", "mean"]
+c_beta  <- summary_table["c_beta", "mean"]
+d_beta  <- summary_table["d_beta", "mean"]
+
+alpha <-  a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh
+beta <-  a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip)) + geom_point(aes(x=SWR, y=predicted, color=RH))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip)) + geom_point(aes(x=SWR, y=observed, color=RH))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m10, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m10 <- waic(log_lik)
+# Calculate LOO
+loo_result_m10 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m10)
+print(loo_result_m10)
+
+rmse_m10 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m10"),
+                          climate_var = c("SWR, T, RH"),
+                          alpha = c("a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = c_alpha,
+                          d_alpha = d_alpha,
+                          e_alpha = NA,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * SWR + c_beta * T + d_beta * RH"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = c_beta,
+                          d_beta = d_beta,
+                          e_beta = NA,
+                          f_beta = NA,
+                          g_beta = NA))
+
+
+```
+
+
+# M11: Short Wave Radiation + Temperature + Precipitation + Wind
+
+Lightning strike rate modeled from a dgamma distribution where mu and sigma are dependent on climate: shortwave radiation,  temperature, relative humidity, and wind. 
+    S ~ dgamma( mu , sigma ),
+    mu <- a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH + e_alpha * W,
+    sigma <- a_beta + b_beta * SWR + c_beta * T + d_beta * RH + e_beta * W,,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair,
+  RH = train$rh,
+  W = train$wind
+)
+
+init_list <- function() {
+  list(a_alpha = 1, b_alpha = 0.1, c_alpha = 0.1, d_alpha = 0.1, e_alpha = 0.1,
+       a_beta = 1, b_beta = 0.1, c_beta = 0.1, d_beta = 0.1, e_beta = 0.1)
+}
+
+# Compile and fit the Stan model
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m11.rds")) {
+  m11 <- stan(file = "gamma_swr_tair_rh_wind.stan", data = dat, 
+           iter = 2000, 
+           chains = 1, 
+           init = init_list,
+           cores = min(parallel::detectCores(), 4))
+    saveRDS(m11, file = "/raid/cuden/rds/compiled_gamma_m11.rds")
+    } else {
+      m11 <- readRDS("/raid/cuden/rds/compiled_gamma_m11.rds")
+    }
+```
+
+
+```{r}
+
+print(m11, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta"))
+
+traceplot(m11)
+
+parameter_stats <- summary(m11)$summary[, c("mean", "sd")][1:10, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "blue", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+c_alpha <- summary_table["c_alpha", "mean"]
+d_alpha <- summary_table["d_alpha", "mean"]
+e_alpha <- summary_table["e_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta <- summary_table["b_beta", "mean"]
+c_beta <- summary_table["c_beta", "mean"]
+d_beta <- summary_table["d_beta", "mean"]
+e_beta <- summary_table["e_beta", "mean"]
+
+alpha <-  a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh + e_alpha * test$wind
+beta <-  a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh + e_beta * test$wind
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, W = test$wind)) + geom_point(aes(x=SWR, y=predicted, color=W))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, W = test$wind)) + geom_point(aes(x=SWR, y=observed, color=W))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m11, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m11 <- waic(log_lik)
+# Calculate LOO
+loo_result_m11 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m11)
+print(loo_result_m11)
+
+rmse_m11 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m11"),
+                          climate_var = c("SWR, T, RH, W"),
+                          alpha = c("a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH + e_alpha * W"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = c_alpha,
+                          d_alpha = d_alpha,
+                          e_alpha = e_alpha,
+                          f_alpha = NA,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * SWR + c_beta * T + d_beta * RH + e_beta * W"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = c_beta,
+                          d_beta = d_beta,
+                          e_beta = e_beta,
+                          f_beta = NA,
+                          g_beta = NA))
+
+```
+
+# M12: Short Wave Radiation + Temperature + Precipitation + Wind + Precipitation
+
+Lightning strike rate modeled from a dgamma distribution where mu and sigma are dependent on climate: shortwave radiation,  temperature, relative humidity, wind, and precipitation. 
+    S ~ dgamma( mu , sigma ),
+    mu <- a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH + e_alpha * W + f_alpha * P,
+    sigma <- a_beta + b_beta * SWR + c_beta * T + d_beta * RH + e_beta * W + f_beta * P,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair,
+  RH = train$rh,
+  W = train$wind,
+  P = train$precip
+)
+
+
+# Compile and fit the Stan model
+init_list <- function() {
+  list(a_alpha = 0.1, b_alpha = 0.1, c_alpha = 0.1, d_alpha = 0.1, e_alpha = 0.1, f_alpha = 0.1,
+       a_beta = 0.1, b_beta = 0.1, c_beta = 0.1, d_beta = 0.1, e_beta = 0.1, f_beta = 0.1)
+}
+
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m12.rds")) {
+  m12 <- stan(file = "gamma_swr_tair_rh_wind_precip.stan", 
+            data = dat,
+            iter = 2000, 
+            chains = 4, 
+            init = init_list,
+            cores = min(parallel::detectCores(), 4))
+    saveRDS(m12, file = "/raid/cuden/rds/compiled_gamma_m12.rds")
+    } else {
+      m12 <- readRDS("/raid/cuden/rds/compiled_gamma_m12.rds")
+    }
+
+```
+
+
+```{r}
+
+print(m12, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "f_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta", "f_beta"))
+
+traceplot(m12)
+
+parameter_stats <- summary(m12)$summary[, c("mean", "sd")][1:12, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "blue", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+c_alpha <- summary_table["c_alpha", "mean"]
+d_alpha <- summary_table["d_alpha", "mean"]
+e_alpha <- summary_table["e_alpha", "mean"]
+f_alpha <- summary_table["f_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta <- summary_table["b_beta", "mean"]
+c_beta <- summary_table["c_beta", "mean"]
+d_beta <- summary_table["d_beta", "mean"]
+e_beta <- summary_table["e_beta", "mean"]
+f_beta <- summary_table["f_beta", "mean"]
+
+alpha <-  exp(a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh + e_alpha * test$wind + f_alpha * test$precip)
+beta <-  exp(a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh + e_beta * test$wind + f_beta * test$precip)
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, W = test$wind)) + geom_point(aes(x=SWR, y=predicted, color=P))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, W = test$wind)) + geom_point(aes(x=SWR, y=observed, color=P))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m12, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m12 <- waic(log_lik)
+# Calculate LOO
+loo_result_m12 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m12)
+print(loo_result_m12)
+
+rmse_m12 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m12"),
+                          climate_var = c("SWR, T, RH, W, P"),
+                          alpha = c("a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH + e_alpha * W + f_alpha * P"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = c_alpha,
+                          d_alpha = d_alpha,
+                          e_alpha = e_alpha,
+                          f_alpha = f_alpha,
+                          g_alpha = NA,
+                          beta = c("a_beta + b_beta * SWR + c_beta * T + d_beta * RH + e_beta * W + f_beta * P"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = c_beta,
+                          d_beta = d_beta,
+                          e_beta = e_beta,
+                          f_beta = f_beta,
+                          g_beta = NA))
+```
+
+# M13: Short Wave Radiation + Temperature + Precipitation + Wind + Precipitation + Surface Pressure
+
+Lightning strike rate modeled from a gamma distribution where mu and sigma are dependent on climate: shortwave radiation,  temperature, relative humidity, wind, precipitation, and surface pressure
+. 
+    S ~ dgamma( mu , sigma ),
+    mu <- a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH + e_alpha * W + f_alpha * P + g_alpha * SP,
+    sigma <- a_beta + b_beta * SWR + c_beta * T + d_beta * RH + e_beta * W + f_beta * P + g_beta * SP,
+    
+```{r, echo=FALSE, results='hide', include=FALSE}
+
+#library(rstan)
+
+dat <- list(
+  N = nrow(train),
+  S = train$strikes,
+  SWR = train$swr,
+  T = train$tair,
+  RH = train$rh,
+  W = train$wind,
+  P = train$precip,
+  SP = train$sp
+)
+
+
+# Compile and fit the Stan model
+init_list <- function() {
+  list(a_alpha = 1, b_alpha = 0.1, c_alpha = 0.1, d_alpha = 0.1, e_alpha = 0.1, f_alpha = 0.1, g_alpha = 0.1,
+       a_beta = 1, b_beta = 0.1, c_beta = 0.1, d_beta = 0.1, e_beta = 0.1, f_beta = 0.1, g_beta = 0.1)
+}
+
+if (!file.exists("/raid/cuden/rds/compiled_gamma_m13.rds")) {
+  m13 <- stan(file = "gamma_swr_tair_rh_wind_precip_sp.stan", 
+            data = dat,
+            iter = 2000, 
+            chains = 4, 
+            init = init_list,
+            cores = min(parallel::detectCores(), 4))
+    saveRDS(m13, file = "/raid/cuden/rds/compiled_gamma_m13.rds")
+    } else {
+      m13 <- readRDS("/raid/cuden/rds/compiled_gamma_m13.rds")
+    }
+
+```
+
+
+```{r}
+
+print(m13, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "f_alpha", "g_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta", "f_beta", "g_beta"))
+
+traceplot(m13)
+
+parameter_stats <- summary(m13)$summary[, c("mean", "sd")][1:14, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+ggplot(summary_table, aes(x = parameter, y = mean)) +
+  geom_point(color = "blue", size = 3) +  # Point for the mean
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.2) +  # Error bars for SD
+  labs(y = "Parameter Estimate", x = "Parameter") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+c_alpha <- summary_table["c_alpha", "mean"]
+d_alpha <- summary_table["d_alpha", "mean"]
+e_alpha <- summary_table["e_alpha", "mean"]
+f_alpha <- summary_table["f_alpha", "mean"]
+g_alpha <- summary_table["g_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta <- summary_table["b_beta", "mean"]
+c_beta <- summary_table["c_beta", "mean"]
+d_beta <- summary_table["d_beta", "mean"]
+e_beta <- summary_table["e_beta", "mean"]
+f_beta <- summary_table["f_beta", "mean"]
+g_beta <- summary_table["g_beta", "mean"]
+
+alpha <-  exp(a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh + e_alpha * test$wind + f_alpha * test$precip + g_alpha * test$sp)
+beta <-  exp(a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh + e_beta * test$wind + f_beta * test$precip + g_beta * test$sp)
+
+simStrikes <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, W = test$wind, SP = test$sp)) + geom_point(aes(x=SWR, y=predicted, color=SP))
+ggplot(data = data.frame(observed = test$strikes, predicted = simStrikes, T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, W = test$wind, SP = test$sp)) + geom_point(aes(x=SWR, y=observed, color=SP))
+
+plot(simStrikes, test$strikes)
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+# Extract the log-likelihood
+log_lik <- extract_log_lik(m13, parameter_name = "log_lik")
+
+# Calculate WAIC
+waic_result_m13 <- waic(log_lik)
+# Calculate LOO
+loo_result_m13 <- loo(log_lik)
+
+# Print WAIC and Loo result
+print(waic_result_m13)
+print(loo_result_m13)
+
+rmse_m13 <- RMSE(simStrikes, test$strikes)
+
+param_table <- rbind(param_table, data.frame(scale = c("seasonal"),
+                          distribution = c("gamma"),
+                          model_name = c("m13"),
+                          climate_var = c("SWR, T, RH, W, P, SP"),
+                          alpha = c("a_alpha + b_alpha * SWR + c_alpha * T + d_alpha * RH + e_alpha * W + f_alpha * P + g_alpha * SP"),
+                          a_alpha = a_alpha,
+                          b_alpha = b_alpha,
+                          c_alpha = c_alpha,
+                          d_alpha = d_alpha,
+                          e_alpha = e_alpha,
+                          f_alpha = f_alpha,
+                          g_alpha = g_alpha,
+                          beta = c("a_beta + b_beta * SWR + c_beta * T + d_beta * RH + e_beta * W + f_beta * P + g_beta * SP"),
+                          a_beta = a_beta,
+                          b_beta = b_beta,
+                          c_beta = c_beta,
+                          d_beta = d_beta,
+                          e_beta = e_beta,
+                          f_beta = f_beta,
+                          g_beta = g_beta))
+
+#write.csv(param_table, "/raid/cuden/data/gamma_seasonal_model_parameters.csv")
+
+```
+
+```{r}
+colnames <- c("model", "climate_var", "elpd_loo", "p_loo", "looic", "elpd_waic", "p_waic", "waic", "RMSE", "elpd_loo_se","p_loo_se", "looic_se", "elpd_waic_se", "p_waic_se", "waic_se")
+model_comparison <- data.frame(rbind(
+  c("m0.1", "normal", loo_result_m0.1$estimates[1,1], loo_result_m0.1$estimates[2,1], loo_result_m0.1$estimate[3,1], waic_result_m0.1$estimates[1,1], waic_result_m0.1$estimates[2,1], waic_result_m0.1$estimates[3,1], rmse_m0.1,
+    loo_result_m0.1$estimates[1,2], loo_result_m0.1$estimates[2,2], loo_result_m0.1$estimate[3,2], waic_result_m0.1$estimates[1,2], waic_result_m0.1$estimates[2,2], waic_result_m0.1$estimates[3,2]),
+  c("m0.2", "gamma", loo_result_m0.2$estimates[1,1], loo_result_m0.2$estimates[2,1], loo_result_m0.2$estimate[3,1], waic_result_m0.2$estimates[1,1], waic_result_m0.2$estimates[2,1], waic_result_m0.2$estimates[3,1], rmse_m0.2,
+    loo_result_m0.2$estimates[1,2], loo_result_m0.2$estimates[2,2], loo_result_m0.2$estimate[3,2], waic_result_m0.2$estimates[1,2], waic_result_m0.2$estimates[2,2], waic_result_m0.2$estimates[3,2]),
+  c("m1", "CAPE", loo_result_m1$estimates[1,1], loo_result_m1$estimates[2,1], loo_result_m1$estimate[3,1], waic_result_m1$estimates[1,1], waic_result_m1$estimates[2,1], waic_result_m1$estimates[3,1], rmse_m1,
+    loo_result_m1$estimates[1,2], loo_result_m1$estimates[2,2], loo_result_m1$estimate[3,2], waic_result_m1$estimates[1,2], waic_result_m1$estimates[2,2], waic_result_m1$estimates[3,2]),
+  c("m2", "CXP", loo_result_m2$estimates[1,1], loo_result_m2$estimates[2,1], loo_result_m2$estimate[3,1], waic_result_m2$estimates[1,1], waic_result_m2$estimates[2,1], waic_result_m2$estimates[3,1], rmse_m2,
+    loo_result_m2$estimates[1,2], loo_result_m2$estimates[2,2], loo_result_m2$estimate[3,2], waic_result_m2$estimates[1,2], waic_result_m2$estimates[2,2], waic_result_m2$estimates[3,2]),
+  c("m3", "rh", loo_result_m3$estimates[1,1], loo_result_m3$estimates[2,1], loo_result_m3$estimate[3,1], waic_result_m3$estimates[1,1], waic_result_m3$estimates[2,1], waic_result_m3$estimates[3,1], rmse_m3,
+    loo_result_m3$estimates[1,2], loo_result_m3$estimates[2,2], loo_result_m3$estimate[3,2], waic_result_m3$estimates[1,2], waic_result_m3$estimates[2,2], waic_result_m3$estimates[3,2]),
+  c("m4", "swr", loo_result_m4$estimates[1,1], loo_result_m4$estimates[2,1], loo_result_m4$estimate[3,1], waic_result_m4$estimates[1,1], waic_result_m4$estimates[2,1], waic_result_m4$estimates[3,1], rmse_m4,
+    loo_result_m4$estimates[1,2], loo_result_m4$estimates[2,2], loo_result_m4$estimate[3,2], waic_result_m4$estimates[1,2], waic_result_m4$estimates[2,2], waic_result_m4$estimates[3,2]),
+  c("m5", "tair", loo_result_m5$estimates[1,1], loo_result_m5$estimates[2,1], loo_result_m5$estimate[3,1], waic_result_m5$estimates[1,1], waic_result_m5$estimates[2,1], waic_result_m5$estimates[3,1], rmse_m5,
+    loo_result_m5$estimates[1,2], loo_result_m5$estimates[2,2], loo_result_m5$estimate[3,2], waic_result_m5$estimates[1,2], waic_result_m5$estimates[2,2], waic_result_m5$estimates[3,2]),
+  c("m6", "sp", loo_result_m6$estimates[1,1], loo_result_m6$estimates[2,1], loo_result_m6$estimate[3,1], waic_result_m6$estimates[1,1], waic_result_m6$estimates[2,1], waic_result_m6$estimates[3,1], rmse_m6,
+    loo_result_m6$estimates[1,2], loo_result_m6$estimates[2,2], loo_result_m6$estimate[3,2], waic_result_m6$estimates[1,2], waic_result_m6$estimates[2,2], waic_result_m6$estimates[3,2]),
+  c("m7", "precip", loo_result_m7$estimates[1,1], loo_result_m7$estimates[2,1], loo_result_m7$estimate[3,1], waic_result_m7$estimates[1,1], waic_result_m7$estimates[2,1], waic_result_m7$estimates[3,1], rmse_m7,
+    loo_result_m7$estimates[1,2], loo_result_m7$estimates[2,2], loo_result_m7$estimate[3,2], waic_result_m7$estimates[1,2], waic_result_m7$estimates[2,2], waic_result_m7$estimates[3,2]),
+  c("m8", "wind", loo_result_m8$estimates[1,1], loo_result_m8$estimates[2,1], loo_result_m8$estimates[3,1], waic_result_m8$estimates[1,1], waic_result_m8$estimates[2,1], waic_result_m8$estimates[3,1], rmse_m8,
+    loo_result_m8$estimates[1,2], loo_result_m8$estimates[2,2], loo_result_m8$estimate[3,2], waic_result_m8$estimates[1,2], waic_result_m8$estimates[2,2], waic_result_m8$estimates[3,2]), 
+  c("m9", "SWR+T", loo_result_m9$estimates[1,1], loo_result_m9$estimates[2,1], loo_result_m9$estimates[3,1], waic_result_m9$estimates[1,1], waic_result_m9$estimates[2,1], waic_result_m9$estimates[3,1], rmse_m9,
+    loo_result_m9$estimates[1,2], loo_result_m9$estimates[2,2], loo_result_m9$estimate[3,2], waic_result_m9$estimates[1,2], waic_result_m9$estimates[2,2], waic_result_m9$estimates[3,2]),
+  c("m10", "SWR+T+RH", loo_result_m10$estimates[1,1], loo_result_m10$estimates[2,1], loo_result_m10$estimates[3,1], waic_result_m10$estimates[1,1], waic_result_m10$estimates[2,1], waic_result_m10$estimates[3,1], rmse_m10,
+    loo_result_m10$estimates[1,2], loo_result_m10$estimates[2,2], loo_result_m10$estimate[3,2], waic_result_m10$estimates[1,2], waic_result_m10$estimates[2,2], waic_result_m10$estimates[3,2]),
+  c("m11", "SWR+T+RH+W", loo_result_m11$estimates[1,1], loo_result_m11$estimates[2,1], loo_result_m11$estimates[3,1], waic_result_m11$estimates[1,1], waic_result_m11$estimates[2,1], waic_result_m11$estimates[3,1], rmse_m11,
+    loo_result_m11$estimates[1,2], loo_result_m11$estimates[2,2], loo_result_m11$estimate[3,2], waic_result_m11$estimates[1,2], waic_result_m11$estimates[2,2], waic_result_m11$estimates[3,2]),
+  c("m12", "SWR+T+RH+W+P", loo_result_m12$estimates[1,1], loo_result_m12$estimates[2,1], loo_result_m12$estimates[3,1], waic_result_m12$estimates[1,1], waic_result_m12$estimates[2,1], waic_result_m12$estimates[3,1], rmse_m12,
+    loo_result_m12$estimates[1,2], loo_result_m12$estimates[2,2], loo_result_m12$estimate[3,2], waic_result_m12$estimates[1,2], waic_result_m12$estimates[2,2], waic_result_m12$estimates[3,2]),
+  c("m13", "SWR+T+RH+W+P+SP", loo_result_m13$estimates[1,1], loo_result_m13$estimates[2,1], loo_result_m13$estimates[3,1], waic_result_m13$estimates[1,1], waic_result_m13$estimates[2,1], waic_result_m13$estimates[3,1], rmse_m13,
+    loo_result_m13$estimates[1,2], loo_result_m13$estimates[2,2], loo_result_m13$estimate[3,2], waic_result_m13$estimates[1,2], waic_result_m13$estimates[2,2], waic_result_m13$estimates[3,2])))
+
+colnames(model_comparison) <- colnames
+
+model_comparison$elpd_loo <- as.numeric(model_comparison$elpd_loo)
+model_comparison$p_loo <- as.numeric(model_comparison$p_loo)
+model_comparison$looic <- as.numeric(model_comparison$looic)
+model_comparison$elpd_waic <- as.numeric(model_comparison$elpd_waic)
+model_comparison$p_waic <- as.numeric(model_comparison$p_waic)
+model_comparison$waic <- as.numeric(model_comparison$waic)
+model_comparison$RMSE <- as.numeric(model_comparison$RMSE)
+model_comparison$elpd_loo_se <- as.numeric(model_comparison$elpd_loo_se)
+model_comparison$p_loo_se <- as.numeric(model_comparison$p_loo_se)
+model_comparison$looic_se <- as.numeric(model_comparison$looic_se)
+model_comparison$elpd_waic_se <- as.numeric(model_comparison$elpd_waic_se)
+model_comparison$p_waic_se <- as.numeric(model_comparison$p_waic_se)
+model_comparison$waic_se <- as.numeric(model_comparison$waic_se)
+
+write.csv(model_comparison, "/raid/cuden/data/gamma_monthly_model_comparison.csv")
+
+#print(arrange(model_comparison, waic))
+
+model_comparison
+```
+looic is analogous to AIC or WAIC in penalizing for model complexity.
+p_loo reflects how much the model adjusts to the data.
+elpd_loo directly measures predictive accuracy; a higher score is better.
+
+when comparing loo with waic, both WAIC and LOO estimate predictive accuracy and penalize for complexity. WAIC can be less computationally intensive than LOO but may be less robust for models with weak priors or highly influential observations. Theoretically, waic and looic should yield similar results if the model fits the data well - this is the case with these models. 
+
+Next, I'll plot LOO and WAIC results, including standard error bars for a visual comparison of model performance. The SE represents the uncertainty or variability in the estimated expected log pointwise predictive density (elpd) scores for WAIC and LOO. 
+
+- The SE provides an estimate of how much the elpd score might vary if you repeated the sampling process. 
+- A larger SE indicates greater uncertainty in the predictive performance estimate, often signaling that some data points have a disproportionate influence or that the model may not fit well.
+- When comparing two models based on their WAIC or LOO scores, the difference in elpd values should be interpreted in conjunction with the SE. If the SE of the difference is large relative to the difference itself, the evidence supporting one model over the other is weaker.
+
+A small SE suggests stable and reliable estimates for predictive performance.
+A large SE can indicate:
+- Model misspecification or inadequate fit.
+- Strong influence from a few data points (outliers).
+- High variance in the likelihood function.
+
+### LOO
+
+1. elpd_loo (Expected Log Pointwise Predictive Density):
+Definition: A measure of model fit that estimates how well the model predicts new data.
+Interpretation: Higher values of elpd_loo indicate better predictive accuracy. It sums over the pointwise log-likelihood contributions of each observation, adjusted using leave-one-out cross-validation (LOO).
+
+```{r}
+model_comparison$model <- as.factor(model_comparison$model)
+
+p1 <- ggplot(model_comparison, aes(x = elpd_loo, y = model)) +
+  geom_point(size = 1) + 
+  geom_errorbar(aes(xmin = elpd_loo - elpd_loo_se, xmax = elpd_loo + elpd_loo_se), width = 0.2) +  # Error bars for SE
+  labs(x = "LOO", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+        plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  ggtitle("(a)")
+p1
+```
+2. p_loo (Effective Number of Parameters):
+Definition: A measure of model complexity derived from the LOO process.
+Interpretation: It quantifies how flexible the model is in fitting the data.
+Low values indicate simpler models with less potential for overfitting.
+High values suggest greater model complexity and potential overfitting.
+This value is related to how much the model adapts to noise in the data rather than capturing the underlying signal.
+
+```{r}
+
+p2 <- ggplot(model_comparison, aes(x = p_loo, y = model)) +
+  geom_point(size = 1) + 
+  geom_errorbar(aes(xmin = p_loo - p_loo_se, xmax = p_loo + p_loo_se), width = 0.2) +  # Error bars for SE
+  labs(x = "Eff Num Params for LOO", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+        plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  ggtitle("(b)")
+p2
+
+```
+
+3. looic (Leave-One-Out Information Criterion):
+Definition: A model selection criterion similar to AIC (Akaike Information Criterion) or WAIC, calculated as:
+Interpretation: Lower looic values indicate better out-of-sample predictive performance.
+
+The looic penalizes the model for complexity, balancing fit against overfitting risk.
+When comparing multiple models, the model with the lowest looic value is generally preferred.
+
+It's basically the same as WAIC. 
+
+### WAIC
+
+1. elpd_waic (Expected Log Pointwise Predictive Density for WAIC):
+Definition: A measure of model fit based on pointwise log-likelihood contributions.
+Interpretation: Similar to elpd_loo, higher values indicate better model fit and predictive performance.
+Computation: Unlike LOO, WAIC uses all data points simultaneously without needing to fit models multiple times.
+```{r}
+
+p3 <- ggplot(model_comparison, aes(x = elpd_waic, y = model)) +
+  geom_point(size = 1) + 
+  geom_errorbar(aes(xmin = elpd_waic - elpd_waic_se, xmax = elpd_waic + elpd_waic_se), width = 0.2) +  # Error bars for SE
+  labs(x = "ELPD WAIC", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+        plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  ggtitle("Parameter Means and SDs from Stan Model")
+p3
+```
+
+2. p_waic (Effective Number of Parameters for WAIC):
+Definition: A measure of model complexity derived from the variance of the pointwise log-likelihood.
+Interpretation:
+Low values indicate a simpler model with less risk of overfitting.
+High values suggest more flexibility in fitting the data and greater complexity.
+
+```{r}
+
+p4 <- ggplot(model_comparison, aes(x = p_waic, y = model)) +
+  geom_point(size = 1) + 
+  geom_errorbar(aes(xmin = p_waic - p_waic_se, xmax = p_waic + p_waic_se), width = 0.2) +  # Error bars for SE
+  labs(x = "Effective Number of Parameters for WAIC", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+        plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  ggtitle("")
+p4
+```
+
+3. WAIC (Widely Applicable Information Criterion):
+Definition: A penalized estimate of model fit, computed as: waic= −2 × elpd_waic
+Interpretation: Lower waic values indicate better model fit and generalization to new data.
+
+```{r}
+
+p5 <- ggplot(model_comparison, aes(x = waic, y = model)) +
+  geom_point(size = 1) + 
+  geom_errorbar(aes(xmin = waic - waic_se, xmax = waic + waic_se), width = 0.2) +  # Error bars for SE
+  labs(x = "WAIC", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+        plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  ggtitle("(c)")
+p5
+```
+
+### Route Mean Squared Error 
+```{r}
+p6 <- ggplot(model_comparison, aes(x = RMSE, y = model)) +
+  geom_point(size = 1) + 
+  labs(x = "RMSE", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+        plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  ggtitle("(d)") 
+p6
+```
+
+M13, which includes the addative affects of all 6 surface level climate variables, performs best, with the lowest WAIC score and highest loo score, as well as the lowest RMSE. However, there is risk for overfitting as M13 has the most parameters. 
+
+
+```{r}
+#library(patchwork)
+(p1 | p2 | p5 | p6)
+```
+
+Its worth comparing the additive model, m13, with the cape-based model (m1). Let's look at plots of predictions versus observations for each model:
+
+```{r}
+#Predictions for m1 (smple cape-basaed model)
+
+print(m1, pars = c("a_alpha", "b_alpha", "a_beta", "b_beta"))
+
+parameter_stats <- summary(m1)$summary[, c("mean", "sd")][1:4, 1:2]
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta  <- summary_table["b_beta ", "mean"]
+a_beta <- summary_table[3,2]
+b_beta  <- summary_table[4,2]
+
+alpha <-  a_alpha + b_alpha * test$cape
+beta <-  a_beta + b_beta * test$cape
+
+simStrikes_m1 <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes_m1, breaks=30, main = "predictions")
+
+plot(simStrikes_m1, test$strikes, xlim = c(0,2), ylim = c(0,2))
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+
+#Predictions for m13 (addative model that includes all siz climate variables)
+
+print(m13, pars = c("a_alpha", "b_alpha", "c_alpha", "d_alpha", "e_alpha", "f_alpha", "g_alpha", "a_beta", "b_beta", "c_beta", "d_beta", "e_beta", "f_beta", "g_beta"))
+
+parameter_stats <- summary(m13)$summary[, c("mean", "sd")][1:14, 1:2]
+print(parameter_stats)
+
+summary_table <- data.frame(
+  parameter = rownames(parameter_stats),
+  mean = parameter_stats[, "mean"],
+  sd = parameter_stats[, "sd"]
+)
+
+#predictions 
+a_alpha <- summary_table["a_alpha", "mean"]
+b_alpha <- summary_table["b_alpha", "mean"]
+c_alpha <- summary_table["c_alpha", "mean"]
+d_alpha <- summary_table["d_alpha", "mean"]
+e_alpha <- summary_table["e_alpha", "mean"]
+f_alpha <- summary_table["f_alpha", "mean"]
+g_alpha <- summary_table["g_alpha", "mean"]
+a_beta <- summary_table["a_beta", "mean"]
+b_beta <- summary_table["b_beta", "mean"]
+c_beta <- summary_table["c_beta", "mean"]
+d_beta <- summary_table["d_beta", "mean"]
+e_beta <- summary_table["e_beta", "mean"]
+f_beta <- summary_table["f_beta", "mean"]
+g_beta <- summary_table["g_beta", "mean"]
+
+alpha <-  exp(a_alpha + b_alpha * test$swr + c_alpha * test$tair + d_alpha * test$rh + e_alpha * test$wind + f_alpha * test$precip + g_alpha * test$sp)
+beta <-  exp(a_beta + b_beta * test$swr + c_beta * test$tair + d_beta * test$rh + e_beta * test$wind + f_beta * test$precip + g_beta * test$sp)
+
+simStrikes_m13 <- rgamma(length(test$strikes), alpha, beta)
+
+hist(simStrikes_m13, breaks=30, main = "predictions")
+
+hist(test$strikes, breaks=30, main = "observations")
+
+
+plot(simStrikes_m13, test$strikes, xlim = c(0,2), ylim = c(0,2))
+abline(a = 0, b = 1, col = "red", lty = 2, lwd = 2)
+
+```
+
+```{r}
+pred_comparison <- data.frame(cbind(observed=test$strikes, 
+                                    m1 = simStrikes_m1,
+                                    m13 = simStrikes_m13))
+library(tidyr)                       
+pred_comparison <- pred_comparison %>%
+  pivot_longer(cols = c(m1, m13), names_to = "model", values_to = "predicted")
+
+
+p7 <- ggplot(plot_data, aes(x = predicted, y = observed, alpha = 0.1)) +
+  geom_pointdensity(size = 2) +  # Point density coloring
+  scale_color_viridis_c() +      # Color gradient for density
+  facet_wrap(~ model) +          # Separate plot for each model
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black", size=0.3) + 
+  ylab("Observed") +
+  xlab("Predicted") +
+  labs(color = "Point Density") +
+  theme_minimal() +
+  scale_alpha_continuous(guide = "none") +
+  ggtitle("(c)") +
+  theme(
+    plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01))
+
+
+pred_comparison$residual <- pred_comparison$observed - pred_comparison$predicted
+
+
+p10 <- ggplot(pred_comparison, aes(x = residual, fill = model, color=model)) +
+  geom_density(alpha = 0.3, size=0.3) +
+  labs(title = "(b)",
+       x = "Residuals (Observed - Predicted)",
+       y = "Density") +
+  scale_fill_manual(values = c("m1" = "red", "m13" = "yellowgreen")) +
+  scale_color_manual(values = c("m1" = "red", "m13" = "yellowgreen")) +
+  theme_minimal() + 
+  theme(
+    plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01))
+
+p7
+p10
+```
+
+```{r}
+pred_comparison <- data.frame(cbind(observed=test$strikes, 
+                                    m1 = simStrikes_m1,
+                                    m13 = simStrikes_m13))
+
+pred_comparison <- pred_comparison %>%
+  pivot_longer(cols = c(m1, m13, observed), names_to = "source", values_to = "strike_rate")
+
+
+p11 <- ggplot(pred_comparison, aes(x = strike_rate, color = source, fill=source)) +
+  geom_density(data = subset(pred_comparison, source != "observed"), 
+               alpha = 0.3, size = 0.3) +
+  geom_density(data = subset(pred_comparison, source == "observed"), 
+               alpha = 0.3, size = 0.3) +
+  labs(title = "(a)",
+       x = expression("Lightning Strike Rate (Predicted and Observed)"),
+       y = "Density") +
+  scale_color_manual(values = c("m1" = "red", "m13" = "yellowgreen", "observed" = "blue")) +
+  scale_fill_manual(values = c("m1" = "red", "m13" = "yellowgreen", "observed" = "blue")) +
+  theme_minimal() +
+  labs(fill = NULL, color = NULL) +
+  theme(
+    plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01))
+
+p11
+```
+
+
+```{r}
+#library(ggpointdensity)
+
+# Example data frame (replace with actual data)
+pred_comparison <- data.frame(
+  observed = test$strikes,
+  m1 = simStrikes_m1,
+  m13 = simStrikes_m13
+)
+
+# Reshape data and calculate residuals
+plot_data <- pred_comparison %>%
+  pivot_longer(cols = starts_with("m"), names_to = "model", values_to = "predicted") %>%
+  mutate(residual = observed - predicted)
+
+# Residual plot with points colored by density
+p12 <- ggplot(plot_data, aes(x = observed, y = residual, alpha = 0.1)) +
+  geom_pointdensity(size = 2) +  # Point density coloring
+  scale_color_viridis_c() +      # Color gradient for density
+  facet_wrap(~ model) +          # Separate plot for each model
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 0.3) +
+  xlab(expression("Observed")) +
+  ylab("Residuals (Observed - Predicted)")+
+  labs(color = "Point Density") +
+  theme_minimal() +
+  scale_alpha_continuous(guide = "none") +
+  ggtitle("(d)") +
+  theme(
+    plot.title = element_text(size = 10),
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01))
+
+p12
+```
+
+```{r}
+(p11 + p10) / p7 / p12
+
+```
+
+# Mapped Residuals 
+
+```{r}
+
+# Example data frame (replace with actual data)
+pred_comparison <- data.frame(
+  lat = test$lat,
+  lon = test$lon,
+  observed = test$strikes,
+  m1 = simStrikes_m1,
+  m13 = simStrikes_m13
+)
+
+pred_comparison <- pred_comparison %>% 
+  mutate(residuals_m1 = observed - m1) %>% 
+  mutate(residuals_m13 = observed - m13)
+
+# get new england and new york polygons from mapdata library :
+states <- map_data("state")#turn state line map into data frame
+northeast <- subset(states, region %in% c("vermont", "new hampshire", "connecticut", "maine", "rhode island", "massachusetts", "new york"))#subest northeastern states
+
+# plot state polygons and PalEON grid, just to see what we are working with:
+map <- geom_polygon(data = northeast, aes(x=long, y = lat, group = group), fill = NA, color = "black", size=0.2) 
+
+# Combine residuals from both models into a single data frame
+all_residuals <- pred_comparison %>%
+  pivot_longer(cols = c(residuals_m1, residuals_m13), 
+               names_to = "model", 
+               values_to = "residuals") %>%
+  # Calculate the average residuals for each lat/lon combination
+  group_by(lat, lon, model) %>%
+  summarize(residuals = mean(residuals), .groups = "drop")
+
+# Map plots for each model
+map_plot_m1 <- ggplot(all_residuals %>% filter(model == "residuals_m1"), 
+                      aes(x = lon, y = lat, fill = residuals)) +
+  geom_raster() +
+  scale_fill_gradientn(
+    colors = c("green4", "greenyellow", "yellow","orange", "darkred"),
+    name = expression(Residuals (m1)),
+    guide = guide_colorbar(direction = "horizontal", title.position = "top")
+  ) +
+  xlab("") +
+  ylab("") +
+  theme_minimal() +
+  ggtitle("") +
+   theme(
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    legend.position = c(0.05, 0.95),  # Position: top-left
+    legend.justification = c("left", "top"),  # Align top-left corner
+    legend.background = element_rect(fill = "white", color = "black", size = 0.1),
+    plot.title = element_text(size = 10, hjust = 0),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)
+  ) + map
+
+map_plot_m13 <- ggplot(all_residuals %>% filter(model == "residuals_m13"), 
+                       aes(x = lon, y = lat, fill = residuals)) +
+  geom_raster() +
+  scale_fill_gradientn(
+    colors = c("green4", "greenyellow", "yellow", "orange", "darkred"),
+    name = expression(Residuals (m13)),
+    guide = guide_colorbar(direction = "horizontal", title.position = "top")
+  ) +
+  xlab("") +
+  ylab("") +
+  theme_minimal() +
+  ggtitle("(b)") +
+   theme(
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+     legend.position = c(0.05, 0.95),  # Position: top-left
+    legend.justification = c("left", "top"),  # Align top-left corner
+    legend.background = element_rect(fill = "white", color = "black", size = 0.1),
+    plot.title = element_text(size = 10, hjust = 0),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)
+  )  +
+  scale_y_continuous(position = "right") + map
+
+# Latitude summary plots
+lat_summary_m1 <- ggplot(pred_comparison, aes(x = residuals_m1, y=lat)) +
+  geom_point(shape = 21, fill = NA, color = "grey12", size = 0.5, stroke = 0.5) +
+  theme_minimal() +
+  xlab("Residuals (m1)") +
+  theme(axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    plot.title = element_text(size = 10, hjust = 0),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  xlim(-1, 1) + ylab("Latitude") + 
+  ggtitle("(a)") +
+  geom_vline(xintercept = 0,color = "black", size = 0.3, linetype = "dashed")
+
+lat_summary_m13 <- ggplot(pred_comparison, aes(x = residuals_m13, y=lat)) +
+  geom_point(shape = 21, fill = NA, color = "black", size = 0.5, stroke = 0.5) +
+  theme_minimal() +
+  xlab("Residuals (m13)") +
+  theme(axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    plot.title = element_text(size=10),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  xlim(-1, 1) + ylab("Latitude") + 
+  ggtitle("") +
+  geom_vline(xintercept = 0, color = "black", size = 0.3, linetype = "dashed") +
+  scale_y_continuous(position = "right") 
+
+# Longitude summary plots
+lon_summary_m1 <- ggplot(pred_comparison, aes(x = lon, y = residuals_m1)) +
+  geom_point(shape = 21, fill = NA, color = "black", size = 0.5, stroke = 0.5) +
+  theme_minimal() +
+  theme(axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    plot.title = element_text(size=10),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  ylab("Residuals (m1)") +
+  xlab("Longitude") +
+  ylim(-1,1) +
+  geom_hline(yintercept = 0,color = "black", size = 0.3, linetype = "dashed")
+
+
+lon_summary_m13 <- ggplot(pred_comparison, aes(x = lon, y = residuals_m13)) +
+  geom_point(shape = 21, fill = NA, color = "black", size = 0.5, stroke = 0.5) +
+  theme_minimal() +
+  theme(axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    plot.title = element_text(size=10),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)) +
+  ylab("Residuals (m13)") +
+  xlab("Longitude") +
+   ylim(-1,1) +
+  geom_hline(yintercept = 0,color = "black", size = 0.3, linetype = "dashed") +
+  scale_y_continuous(position = "right") 
+
+empty_plot <- grid::nullGrob()
+
+grid.arrange(lat_summary_m1, map_plot_m1, map_plot_m13, lat_summary_m13, empty_plot, lon_summary_m1, lon_summary_m13, empty_plot, nrow=2, heights=c(3, 1), widths = c(1, 3, 3, 1))
+```
+
+```{r}
+# Example data frame (replace with actual data)
+pred_comparison <- data.frame(
+  lat = test$lat,
+  lon = test$lon,
+  observed = test$strikes,
+  m1 = simStrikes_m1,
+  m13 = simStrikes_m13
+)
+
+# get new england and new york polygons from mapdata library :
+states <- map_data("state")#turn state line map into data frame
+northeast <- subset(states, region %in% c("vermont", "new hampshire", "connecticut", "maine", "rhode island", "massachusetts", "new york"))#subest northeastern states
+
+map <- geom_polygon(data = northeast, aes(x=long, y = lat, group = group), fill = NA, color = "black", size=0.2) 
+
+# Find the global min and max values across all datasets for consistent color scale
+min_value <- min(c(pred_comparison$observed, simStrikes_m1, simStrikes_m13), na.rm = TRUE)
+max_value <- max(c(pred_comparison$observed, simStrikes_m1, simStrikes_m13), na.rm = TRUE)
+
+#get average observed value for each lat lon combo
+avg_observed_data <- pred_comparison %>%
+  group_by(lat, lon) %>%
+  summarize(avg_observed = mean(observed, na.rm = TRUE), .groups = "drop")
+
+map_obs <- ggplot(avg_observed_data, 
+                      aes(x = lon, y = lat, fill = avg_observed)) +
+  geom_raster() +
+  scale_fill_gradientn(
+    colors = c("green4", "greenyellow", "yellow","orange", "darkred"),
+    name = expression(Lightning~Strike~Rate),
+    limits = c(min_value, max_value),  # Ensure the same scale for all maps
+    guide = guide_colorbar(direction = "horizontal", title.position = "top")
+  ) +
+  xlab("") +
+  ylab("") +
+  theme_minimal() +
+  ggtitle("Observed") +
+   theme(
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    legend.position = c(0.05, 0.95),  # Position: top-left
+    legend.justification = c("left", "top"),  # Align top-left corner
+    legend.background = element_rect(fill = "white", color = "black", size = 0.1),
+    plot.title = element_text(size = 10, hjust = 0),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)
+  ) + map
+
+# Map plots for each model
+avg_pred_m1 <- pred_comparison %>%
+  group_by(lat, lon) %>%
+  summarize(avg_pred = mean(m1, na.rm = TRUE), .groups = "drop")
+
+map_pred_m1 <- ggplot(avg_pred_m1, 
+                      aes(x = lon, y = lat, fill = avg_pred)) +
+  geom_raster() +
+  scale_fill_gradientn(
+    colors = c("green4", "greenyellow", "yellow","orange", "darkred"),
+    name = expression(Lightning~Strike~Rate),
+    limits = c(min_value, max_value),  # Ensure the same scale for all maps
+    guide = guide_colorbar(direction = "horizontal", title.position = "top")
+  ) +
+  xlab("") +
+  ylab("") +
+  theme_minimal() +
+  ggtitle("Predicted: m1") +
+   theme(
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    legend.position = c(0.05, 0.95),  # Position: top-left
+    legend.justification = c("left", "top"),  # Align top-left corner
+    legend.background = element_rect(fill = "white", color = "black", size = 0.1),
+    plot.title = element_text(size = 10, hjust = 0),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)
+  ) + map
+
+avg_pred_m13 <- pred_comparison %>%
+  group_by(lat, lon) %>%
+  summarize(avg_observed = mean(m13, na.rm = TRUE), .groups = "drop")
+
+map_pred_m13 <- ggplot(avg_pred_m13, 
+                      aes(x = lon, y = lat, fill = avg_observed)) +
+  geom_raster() +
+  scale_fill_gradientn(
+    colors = c("green4", "greenyellow", "yellow","orange", "darkred"),
+    name = expression(Lightning~Strike~Rate),
+    limits = c(min_value, max_value),  # Ensure the same scale for all maps
+    guide = guide_colorbar(direction = "horizontal", title.position = "top")
+  ) +
+  xlab("") +
+  ylab("") +
+  theme_minimal() +
+  ggtitle("Predicted: m13") +
+   theme(
+     axis.title.x = element_text(size = 8),
+    axis.title.y = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 8),
+    legend.position = c(0.05, 0.95),  # Position: top-left
+    legend.justification = c("left", "top"),  # Align top-left corner
+    legend.background = element_rect(fill = "white", color = "black", size = 0.1),
+    plot.title = element_text(size = 10, hjust = 0),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 6),
+    panel.grid.major = element_line(color = "black", size = 0.05), 
+    panel.grid.minor = element_line(color = "black", size = 0.01)
+  ) + map
+
+map_obs + map_pred_m1 + map_pred_m13
+```
+
+```{r}
+
+ggplot(data = data.frame(
+  observed = test$strikes, predicted = simStrikes, 
+  T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, W = test$wind, SP = test$sp)) + 
+  geom_point(aes(x=T, y=predicted, color=SP)) + 
+  scale_color_continuous(high="green", low="orange")
+
+ggplot(data = data.frame(
+  observed = test$strikes, predicted = simStrikes, 
+  T=test$tair, SWR = test$swr, RH = test$rh, P = test$precip, W = test$wind, SP = test$sp)) + 
+  geom_point(aes(x=T, y=observed, color=SP)) + 
+  scale_color_continuous(high="green", low="orange")
+
+```
+
+Restructure parameter table for publication
+```{r}
+colnames(param_table) <- c("Temporal Scale", "Probability Distribution", "Model", "Predictor Variables", "Parameter Estimate/Model", "aₐ", "bₐ", "cₐ", "dₐ", "eₐ", "fₐ", "gₐ","Parameter Estimate/Model","aᵦ", "bᵦ", "cᵦ", "dᵦ", "eᵦ", "fᵦ", "gᵦ")
+
+print(param_table)
+```
+
+
+```{r}
+param_table[1, 2] <- "Normal(μ, σ)"
+param_table[2, 2] <- "Gamma(α, β)"
+param_table[3, 2] <- "Gamma(α, β)"
+param_table[4, 2] <- "Gamma(α, β)"
+param_table[5, 2] <- "Gamma(α, β)"
+param_table[6, 2] <- "Gamma(α, β)"
+param_table[7, 2] <- "Gamma(α, β)"
+param_table[8, 2] <- "Gamma(α, β)"
+param_table[9, 2] <- "Gamma(α, β)"
+param_table[10, 2] <- "Gamma(α, β)"
+param_table[11, 2] <- "Gamma(α, β)"
+param_table[12, 2] <- "Gamma(α, β)"
+param_table[13, 2] <- "Gamma(α, β)"
+param_table[14, 2] <- "Gamma(α, β)"
+param_table[15, 2] <- "Gamma(α, β)"
+
+param_table[1, 5] <- "μ = 0.33"
+param_table[2, 5] <- "α = 1.72"
+param_table[3, 5] <- "α = aₐ + bₐ * CAPE"
+param_table[4, 5] <- "α = aₐ + bₐ * CxP"
+param_table[5, 5] <- "α = aₐ + bₐ * RH"
+param_table[6, 5] <- "α = aₐ + bₐ * SWR"
+param_table[7, 5] <- "α = aₐ + bₐ * T"
+param_table[8, 5] <- "α = aₐ + bₐ * SP"
+param_table[9, 5] <- "α = aₐ + bₐ * P"
+param_table[10, 5] <- "α = aₐ + bₐ * W"
+param_table[11, 5] <- "α = aₐ + bₐ * SWR + cₐ * T"
+param_table[12, 5] <- "α = aₐ + bₐ * SWR + cₐ * T + dₐ * RH"
+param_table[13, 5] <- "α = aₐ + bₐ * SWR + cₐ * T + dₐ * RH + eₐ * W"
+param_table[14, 5] <- "α = aₐ + bₐ * SWR + cₐ * T + dₐ * RH + eₐ * W + fₐ * P"
+param_table[15, 5] <- "α = aₐ + bₐ * SWR + cₐ * T + dₐ * RH + eₐ * W + fₐ * P + gₐ * SP"
+
+param_table[1, 13] <- "σ = 0.33"
+param_table[2, 13] <- "β = 1.72"
+param_table[3, 13] <- "β = aᵦ + bᵦ * CAPE"
+param_table[4, 13] <- "β = aᵦ + bᵦ * CxP"
+param_table[5, 13] <- "β = aᵦ + bᵦ * RH"
+param_table[6, 13] <- "β = aᵦ + bᵦ * SWR"
+param_table[7, 13] <- "β = aᵦ + bᵦ * T"
+param_table[8, 13] <- "β = aᵦ + bᵦ * SP"
+param_table[9, 13] <- "β = aᵦ + bᵦ * P"
+param_table[10, 13] <- "β = aᵦ + bᵦ * W"
+param_table[11, 13] <- "β = aᵦ + bᵦ * SWR + cᵦ * T"
+param_table[12, 13] <- "β = aᵦ + bᵦ * SWR + cᵦ * T + dᵦ * RH"
+param_table[13, 13] <- "β = aᵦ + bᵦ * SWR + cᵦ * T + dᵦ * RH + eᵦ * W"
+param_table[14, 13] <- "β = aᵦ + bᵦ * SWR + cᵦ * T + dᵦ * RH + eᵦ * W + fᵦ * P"
+param_table[15, 13] <- "β = aᵦ + bᵦ * SWR + cᵦ * T + dᵦ * RH + eᵦ * W + fᵦ * P + gᵦ * SP"
+
+View(param_table)
+```
+
+
+```{r}
+param_table[, 6:12] <- round(param_table[, 6:12], 2)
+param_table[, 14:20] <- round(param_table[, 14:20], 2)
+
+param_table <- param_table[, !names(param_table) %in% c("Temporal Scale")]
+
+```
+
+```{r}
+# Columns to swap
+col1 <- "Probability Distribution"
+col2 <- "Model"
+
+# Swap the column contents
+temp <- param_table[[col1]]
+param_table[[col1]] <- param_table[[col2]]
+param_table[[col2]] <- temp
+
+# Swap the column names
+colnames(param_table)[1] <- "Model" 
+colnames(param_table)[2] <- "Probability Distribution"
+
+
+View(param_table)
+```
+
+
+```{r}
+#write.table(param_table, "/raid/cuden/data/seasonal_param_table.txt")
+
+install.packages("writexl")
+library(writexl)
+
+write_xlsx(param_table, path = "/raid/cuden/data/seasonal_param_table.xlsx")
+
+```
+

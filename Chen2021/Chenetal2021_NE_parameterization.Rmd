@@ -1,0 +1,307 @@
+---
+title: "Chen et al. 2021 NE Parameterizations"
+author: "Charlotte Uden"
+date: "2025-02-09"
+output: html_document
+---
+
+#Applying models from Chen 2021 to the Northeast. This script parameterizes four models from this paper:
+
+#-- Power law: power law regression: FR = a(CAPE × Precip)^b, with the parameters a and b derived from the 
+#optimization at the log-log scale (that is, a linear regression between logarithmic values of flash 
+#rate and CAPE × Precip were performed in practice). Similar to Romps et al.36, this model assumed that 
+#the lightning flash rate depends on the product of CAPE and Precip. The coefficient b allows nonlinear 
+#impacts to be represented in this form. 
+#-- Power law (linear opt): is a variation of the power law model, but with the least squares optimization 
+#obtained without a logarithmic transformation. 
+#-- scale: the original scaling approach proposed by Romps et al.36: FR = a(CAPE × Precip). 
+#-- linear: we slightly modified the scaling approach by allowing a negative intercept: FR = a(CAPE × Precip) + b 
+#-that is, positive flash rate was simulated only when CAPE × Precip was greater than a threshold. 
+#-- a non-parametric: a non-parametric regression model that includes a lookup table of flash rate as 
+#a function of CAPE × Precip within the range of contemporary observations. The modelled flash 
+#rate value in each bin was derived using the arithmetic means of the observed flash rate in all 
+#grid cells associated with the corresponding ranges of CAPE × Precip. A linear extrapolation was used to 
+#extend the model to cover CAPE × Precip values outside of the observational range.
+
+```{r, echo=FALSE, include=FALSE}
+library(rstan)
+library(loo)
+library(dplyr)
+library(stats)
+library(caret)
+library(tidyr)
+library(gridExtra)
+library(mapdata)
+```
+1. Read in the data
+
+
+```{r, echo=FALSE}
+df <- read.csv("/raid/cuden/data/era5_vaisalaLightning_monthlySummerSummaries_2005-2010_NEclip.csv")[,2:16]
+colnames(df) <- c("lon", "lat", "year", "strikes", "cape", "precip", "cxp", "d2m", "tair", "wind", "swr", "sp", "rh", "tmin", "tmax")
+hist(df$strikes, breaks = 30)
+```
+
+2. Split into training and testing data
+```{r, echo=FALSE}
+## 80% of the sample size
+sample_size <- floor(0.8 * nrow(df))
+
+## set the seed to make partition reproducible
+set.seed(123)
+train_index <- sample(seq_len(nrow(df)), size = sample_size)
+
+train <- df[train_index, ]
+test <- df[-train_index, ]
+
+```
+
+
+3. Standardize predictor variables - chen et al do not do this! skip this code chunk 
+```{r, echo=FALSE}
+# #save mean and sd:
+# #-----
+# mu_cxp <- mean(train$cxp)
+# sigma_cxp <- sd(train$cxp)
+# mu_cape <- mean(train$cape)
+# sigma_cape <- sd(train$cape)
+# mu_precip <- mean(train$precip)
+# sigma_precip <- sd(train$precip)
+# mu_tair <- mean(train$tair)
+# sigma_tair <- sd(train$tair)
+# mu_wind <- mean(train$wind)
+# sigma_wind <- sd(train$wind)
+# mu_swr <- mean(train$swr)
+# sigma_swr <- sd(train$swr)
+# mu_sp <- mean(train$sp)
+# sigma_sp <- sd(train$sp)
+# mu_rh <- mean(train$rh)
+# sigma_rh <- sd(train$rh)
+# #-----
+# 
+# train <- train %>%
+#   mutate(cape = (cape-mu_cape)/sigma_cape) %>%
+#   mutate(precip = (precip-mu_precip)/sigma_precip) %>%
+#   mutate(cxp = (cxp-mu_cxp)/sigma_cxp) %>%
+#   mutate(tair = (tair-mu_tair)/sigma_tair) %>%
+#   mutate(wind = (wind-mu_wind)/sigma_wind) %>%
+#   mutate(swr = (swr-mu_swr)/sigma_swr) %>%
+#   mutate(sp = (sp-mu_sp)/sigma_sp) %>%
+#   mutate(rh = (rh-mu_rh)/sigma_rh) 
+# 
+# train <- train[,c("strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+# head(train)
+# 
+# plot(train)
+# 
+# #use the min and max values from the train set to normalize the test set 
+# test <- test %>%
+#   mutate(cape = (cape-mu_cape)/sigma_cape) %>%
+#   mutate(precip = (precip-mu_precip)/sigma_precip) %>%
+#   mutate(cxp = (cxp-mu_cxp)/sigma_cxp) %>%
+#   mutate(tair = (tair-mu_tair)/sigma_tair) %>%
+#   mutate(wind = (wind-mu_wind)/sigma_wind) %>%
+#   mutate(swr = (swr-mu_swr)/sigma_swr) %>%
+#   mutate(sp = (sp-mu_sp)/sigma_sp) %>%
+#   mutate(rh = (rh-mu_rh)/sigma_rh) %>%
+#   mutate(lon = lon) %>%
+#   mutate(lat = lat)
+# 
+# test <- test[,c("lon", "lat", "strikes", "cape", "precip", "cxp", "tair", "wind", "swr", "sp", "rh")]
+
+```
+
+```{r}
+train <- train[,c("lon", "lat", "strikes", "cxp")]
+head(train)
+test <- test[,c("lon", "lat", "strikes", "cxp")]
+head(test)
+```
+
+
+Look at the data
+```{r}
+x <- train$cxp
+y <- train$strikes
+
+x_test <- test$cxp
+y_test <- test$strikes
+
+plot(x, y)
+```
+
+#-- Power Law: FR = a(CAPE × Precip)^b -- 
+
+```{r}
+
+# Transform data
+log_x <- log(x) # standardize CAPE * precipitation
+log_y <- log(y + 0.0001) # lightning strike rate - add a small consgtant so that log(y) doesn not produce - inf.
+
+# Fit the power law model in log-log space
+pl <- nls(log_y ~ log(a) + b * log_x, 
+          start = list(a = 1, b = 1))
+
+```
+
+### Predicitons
+```{r}
+
+# Predict flash rate using the fitted power law
+y_pred_pl <- coef(pl)["a"] * x_test^coef(pl)["b"]
+
+# Plot results
+df_results <- as.data.frame(cbind(x_test=x_test, y_test=y_test, y_pred_pl = y_pred_pl))
+ggplot(df_results) + geom_point(aes(x=x_test, y=y_test)) + geom_line(aes(x=x_test, y = y_pred_pl, col="red"))
+
+```
+
+
+
+
+
+#-- Power law (linear opt) --
+```{r}
+pl_op <- nls(y ~ a * x^b, start = list(a = 1, b = 1))
+summary(pl_op)
+
+a_pl_op <- summary(pl_op)$coefficients[1,1]
+b_pl_op <- summary(pl_op)$coefficients[2,1]
+```
+
+### Predicitons
+```{r}
+# Predict flash rate using the fitted power law
+y_pred_pl_op <- a_pl_op * x_test^b_pl_op
+
+# Plot results
+df_results <- as.data.frame(cbind(df_results, y_pred_pl_op = y_pred_pl_op))
+ggplot(df_results) + geom_point(aes(x=x_test, y=y_test)) + geom_line(aes(x=x_test, y = y_pred_pl_op, col="red"))
+```
+
+
+#-- scale: FR = a(CAPE × Precip) --
+```{r}
+# Fit the scale model (y = a * x)
+sc <- nls(y ~ a * x, 
+                   start = list(a = 1))  # Set reasonable starting value
+summary(sc)
+
+# Extract parameter
+a_sc <- coef(sc)["a"]
+```
+
+```{r}
+# Make predictions on test set
+y_pred_sc <- a_sc * x_test  # Since b is fixed at 1, we use y = a * x
+
+df_results <- data.frame(cbind(df_results, y_pred_sc = y_pred_sc))
+ggplot(df_results) + geom_point(aes(x=x_test, y=y_test)) + geom_line(aes(x=x_test, y = y_pred_sc, col="red"))
+```
+
+#-- linear: FR = a(CAPE × Precip) + b -- 
+```{r}
+# Fit the scale model (y = a * x + b)
+linear <- nls(y ~ a * x + b, 
+                   start = list(a = 1, b = 0))  # Set reasonable starting value
+summary(linear)
+
+# Extract parameter
+a_linear <- coef(linear)["a"]
+b_linear<- coef(linear)["b"]
+```
+
+#predictions
+```{r}
+y_pred_linear <- a_linear * x_test + b_linear  # Apply the fitted equation
+
+df_results <- data.frame(cbind(df_results, y_pred_linear = y_pred_linear))
+ggplot(df_results) + geom_point(aes(x=x_test, y=y_test)) + geom_line(aes(x=x_test, y = y_pred_linear, col="red"))
+
+```
+#-- Non-parametric --
+#modelled flash rate value in each bin was derived using the arithmetic means of the observed flash rate in all 
+#grid cells associated with the corresponding ranges of CAPE × Precip.
+#based on the script Chen shared, there are 50 bins. 
+
+```{r}
+
+# Define binning parameters from the TRAINING SET ONLY
+max_cxp <- max(train$cxp)
+min_cxp <- min(train$cxp)
+nbins <- 50
+bin_size <- (max_cxp - min_cxp) / nbins
+cxp_bin_min <- seq(min_cxp, max_cxp, by = bin_size)
+
+# Bin the TRAINING data
+train <- train %>%
+  mutate(bin_index = cut(cxp, breaks = cxp_bin_min, include.lowest = TRUE, labels = FALSE))
+
+#Compute mean strike rate per bin using TRAINING data
+np_table <- train %>%
+  group_by(bin_index) %>%
+  summarise(strike_bin_means = mean(strikes, na.rm = TRUE)) %>%
+  mutate(cxp_bin_min = cxp_bin_min[bin_index],
+         cxp_bin_max = cxp_bin_min + bin_size)
+
+head(np_table)
+```
+
+```{r}
+# Make predictions for the TEST SET
+df_results <- df_results %>%
+  mutate(bin_index = cut(x_test, breaks = cxp_bin_min, include.lowest = TRUE, labels = FALSE)) %>%
+  left_join(np_table, by = "bin_index")
+
+# Ensure missing bins are handled (e.g., if a test sample falls in an unseen bin)
+df_results$strike_bin_means[is.na(df_results$strike_bin_means)] <- mean(train$strikes, na.rm = TRUE)  # Fill missing bins with global mean
+
+head(df_results)
+
+# Final predictions
+y_pred_np <- df_results$strike_bin_means
+```
+```{r}
+df_results <- data.frame(cbind(df_results, y_pred_np = y_pred_np))
+ggplot(df_results) + geom_point(aes(x=x_test, y=y_test)) + geom_line(aes(x=x_test, y = y_pred_np, col="red"))
+
+```
+
+
+# Next get mean of all predictions and calculate RMSE for comparison with bayes models
+Chen eta l. 2021 exclude the linear model. possible reasons include: it does not properly enforce the physical requirement that lightning should be near-zero when CAPE × Precip is near zero. The power law models and the non-parametric approach provide better statistical and physical performance.The power law and non-parametric models adapt well to future climate scenarios because they capture how lightning frequency changes non-linearly with warming.
+A linear model may overestimate lightning at low CAPE × Precip and underestimate it at high CAPE × Precip, leading to systematic errors.
+
+```{r}
+# Compute mean prediction across all models
+y_pred_mean <- (y_pred_pl + y_pred_pl_op + y_pred_sc + y_pred_np) / 4
+
+df_results <- data.frame(cbind(df_results, y_pred_mean = y_pred_mean))
+ggplot(df_results) + geom_point(aes(x=x_test, y=y_test)) + geom_line(aes(x=x_test, y = y_pred_mean, col="red"))
+
+```
+
+```{r}
+library(Metrics)  # For RMSE calculation
+
+# Compute RMSE for each model
+rmse_pl <- rmse(test$strikes, y_pred_pl)  # Power Law
+rmse_pl_linear_opt <- rmse(test$strikes, y_pred_pl_op)  # Power Law (Linear Opt)
+rmse_scale <- rmse(test$strikes, y_pred_sc)  # Scale Model
+rmse_np <- rmse(test$strikes, y_pred_np)  # Non-Parametric Model
+rmse_mean <- rmse(test$strikes, y_pred_mean)  # Mean of all models
+
+# Print results
+cat("RMSE for Power Law Model:", rmse_pl, "\n")
+cat("RMSE for Power Law (Linear Opt) Model:", rmse_pl_linear_opt, "\n")
+cat("RMSE for Scale Model:", rmse_scale, "\n")
+cat("RMSE for Non-Parametric Model:", rmse_np, "\n")
+cat("RMSE for Mean Model (Ensemble):", rmse_mean, "\n")
+
+
+```
+
+
+
+
+
